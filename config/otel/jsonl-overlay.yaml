@@ -1,0 +1,24 @@
+# =============================================================================
+# Optional overlay — adds the JSONL file sink alongside Tempo.
+#
+# Applied only when TRACE_FILE_ENABLED=true, via docker-compose.jsonl.yaml.
+# The collector merges multiple --config files; maps are merged and lists are
+# replaced, so redeclaring the traces exporter list here is what wires the new
+# exporter into the running pipeline.
+#
+# This is an overlay, not a copy: everything not mentioned here comes from
+# collector.yaml, so the two cannot drift.
+# =============================================================================
+
+exporters:
+  file/traces:
+    path: /trace-data/traces.jsonl
+    rotation:
+      max_megabytes: ${env:TRACE_FILE_MAX_MB}
+      max_days: ${env:TRACE_FILE_MAX_DAYS}
+      max_backups: ${env:TRACE_FILE_MAX_BACKUPS}
+
+service:
+  pipelines:
+    traces:
+      exporters: [otlp/tempo, debug, file/traces]

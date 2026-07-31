@@ -1,0 +1,16 @@
+# =============================================================================
+# Overlay enabling the JSONL trace sink.
+#
+# stack.sh adds this automatically when TRACE_FILE_ENABLED=true. To use raw
+# compose instead:
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.jsonl.yaml up -d
+#
+# Spans then land in ./trace-data/traces.jsonl in addition to Tempo.
+# =============================================================================
+
+services:
+  otel-collector:
+    command:
+      - "--config=/etc/otel/collector.yaml"
+      - "--config=/etc/otel/jsonl-overlay.yaml"
