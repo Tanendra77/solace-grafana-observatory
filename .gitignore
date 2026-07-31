@@ -1,0 +1,67 @@
+# =============================================================================
+# Secrets and local configuration — never commit
+# =============================================================================
+# Real credentials live here. .env.example is the committed template.
+.env
+.env.*
+!.env.example
+
+# Certificates and keys, for when TLS gets added to any pillar.
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.truststore
+secrets/
+
+# Kubernetes / OpenShift artifacts that commonly carry live tokens.
+kubeconfig
+*.kubeconfig
+sa-token*
+
+# Internal reference material describing live infrastructure — OpenShift
+# deployment notes, broker custom resources, product keys, cluster domains.
+# Kept locally for reference, never published.
+doc/
+
+# Local working notes and scratch files. Not part of the deliverable — each
+# branch's README is its documentation.
+docs/
+notes/
+
+# =============================================================================
+# Runtime output
+# =============================================================================
+# Trace JSONL, written only when TRACE_FILE_ENABLED=true.
+trace-data/*
+!trace-data/.gitkeep
+
+# Anything a pillar writes at runtime.
+data/
+*.log
+*.jsonl
+
+# Local-only compose tweaks. Compose picks these up automatically, which makes
+# them an easy way to leak machine-specific settings into a commit.
+docker-compose.override.yaml
+docker-compose.override.yml
+
+# =============================================================================
+# Tooling and editors
+# =============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# =============================================================================
+# OS noise
+# =============================================================================
+.DS_Store
+Thumbs.db
+desktop.ini
