@@ -1,0 +1,87 @@
+# =============================================================================
+# OTel Collector — Solace telemetry queue -> Tempo
+#
+# Requires the contrib distribution; the `solace` receiver exists nowhere else.
+# Every value comes from the environment, set in .env.
+# =============================================================================
+
+receivers:
+  # An ordinary AMQP client binding to the broker's telemetry queue.
+  #
+  # Solace DT is not an agent-scraping model: the broker writes spans into a
+  # real, spool-backed queue and this consumes it. That is why spans survive a
+  # collector outage — the queue fills and drains on reconnect instead of
+  # dropping data.
+  solace:
+    broker: ["${env:SOLACE_BROKER_HOST}:${env:SOLACE_BROKER_AMQP_PORT}"]
+    auth:
+      sasl_plain:
+        username: ${env:SOLACE_TRACE_USER}
+        password: ${env:SOLACE_TRACE_PASSWORD}
+    queue: ${env:SOLACE_TELEMETRY_QUEUE}
+    max_unacknowledged: ${env:SOLACE_MAX_UNACKNOWLEDGED}
+    tls:
+      insecure: true
+      insecure_skip_verify: true
+
+  # Published on host 4317/4318. Nothing uses it yet — it is the seam for
+  # adding instrumented applications later, so their spans land in the same
+  # Tempo alongside the broker's.
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # memory_limiter MUST be first — it can only shed load it sees before
+  # anything else buffers it.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: ${env:OTEL_MEMORY_LIMIT_MIB}
+    spike_limit_mib: ${env:OTEL_MEMORY_SPIKE_MIB}
+
+  # batch MUST be last. Anything that needs individual spans (filter,
+  # tail_sampling) has to sit between these two.
+  batch:
+    send_batch_size: ${env:OTEL_BATCH_SIZE}
+    timeout: ${env:OTEL_BATCH_TIMEOUT}
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  # Prints spans to `docker logs otel-collector`. Invaluable for first
+  # bring-up. Turn OTEL_LOG_LEVEL down to info once the pipeline is proven —
+  # this is noisy and costly at volume.
+  debug:
+    verbosity: ${env:OTEL_DEBUG_VERBOSITY}
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+service:
+  telemetry:
+    logs:
+      level: ${env:OTEL_LOG_LEVEL}
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  extensions: [health_check, zpages]
+  pipelines:
+    traces:
+      receivers: [solace, otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/tempo, debug]

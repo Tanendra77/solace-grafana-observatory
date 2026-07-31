@@ -1,0 +1,27 @@
+# =============================================================================
+# Tempo datasource — replaces the GrafanaDatasource CR.
+#
+# Provisioned from file on every Grafana start, so unlike the operator it cannot
+# drift out of sync after a database reset. No auth: Tempo is unauthenticated
+# inside the compose network.
+# =============================================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Tempo
+    type: tempo
+    uid: tempo-solace
+    access: proxy
+    url: http://tempo:3200
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: GET
+      # Draws the service dependency graph from span relationships.
+      nodeGraph:
+        enabled: true
+      # Streams search results in as they are found rather than waiting for the
+      # full query. Matches stream_over_http_enabled in tempo.yaml.
+      streamingEnabled:
+        search: true
