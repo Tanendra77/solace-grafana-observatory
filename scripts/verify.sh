@@ -114,7 +114,7 @@ section "4. Prometheus"
 # -----------------------------------------------------------------------------
 targets=$(curl -s -m 10 "http://localhost:${PORT_PROMETHEUS}/api/v1/targets" 2>/dev/null)
 for job in solace-std solace-vpn-stats solace-det; do
-  if printf '%s' "$targets" | grep -o "\"job\":\"$job\".*\"health\":\"up\"" >/dev/null 2>&1; then
+  if printf '%s' "$targets" | grep -o "\"job\":\"$job\"[^{]*\"health\":\"up\"" >/dev/null 2>&1; then
     pass "target '$job' is up"
   else
     fail "target '$job' is not up" "http://localhost:${PORT_PROMETHEUS}/targets shows why"
