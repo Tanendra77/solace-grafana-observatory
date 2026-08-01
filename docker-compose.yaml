@@ -97,3 +97,34 @@ services:
     volumes:
       - ./scripts:/scripts:ro
     restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Prometheus exporter (solacecommunity/solace-prometheus-exporter).
+  #
+  # Scrapes the broker's SEMP API with the read-only `monitor` user and
+  # re-exposes it in Prometheus format. Endpoint aliases /solace-std,
+  # /solace-vpn-stats and /solace-det work out of the box from these three env
+  # vars alone — no config file needed. Confirmed against this exact image
+  # during planning: 80+ solace_* series on /solace-std, queue-level detail
+  # (solace_queue_spool_usage_msgs etc, labelled queue_name/vpn_name) on
+  # /solace-det.
+  #
+  # Gates on broker-bootstrap completing, not merely solbroker starting: the
+  # VPN and demo queue must exist before the first scrape for that data to
+  # show up immediately.
+  # ---------------------------------------------------------------------------
+  solace-exporter:
+    image: ${EXPORTER_IMAGE}
+    container_name: mobs-exporter
+    hostname: solace-exporter
+    networks: [solace_metrics_net]
+    depends_on:
+      broker-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      - SOLACE_SCRAPE_URI=${SOLACE_SEMP_URL}
+      - SOLACE_USERNAME=monitor
+      - SOLACE_PASSWORD=${SOLACE_MONITOR_PASSWORD}
+    ports:
+      - "${PORT_EXPORTER}:9628"
+    restart: unless-stopped
