@@ -1,0 +1,18 @@
+# =============================================================================
+# Prometheus datasource — provisioned from file so it can't drift out of sync
+# after a database reset, same pattern as the Tempo datasource on grafana-dt.
+# No auth: Prometheus is unauthenticated inside the compose network.
+# =============================================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus-solace
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 30s
