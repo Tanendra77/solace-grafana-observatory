@@ -1,70 +1,157 @@
-# Solace Grafana Observatory
+# Solace Broker Metrics — local stack
 
-Observability for Solace PubSub+ brokers, built as local Docker Compose stacks and
-mirrored from working OpenShift deployments.
+Prometheus metrics for a Solace PubSub+ broker, collected via the community
+`solace-prometheus-exporter`, stored 7 days in Prometheus, and visualized in
+Grafana. Everything runs in Docker on one machine.
 
-Three pillars, built one at a time:
+This is the metrics pillar of the same effort as `grafana-dt` (distributed
+tracing) — reproducing the OpenShift build documented in
+`doc/solace-observability-readme.md`, without OpenShift, using the community
+exporter in place of the certified operator's bundled one. Same broker
+metrics, same endpoint paths (`/solace-std`, `/solace-vpn-stats`,
+`/solace-det`), plain containers instead of CRs and operators.
 
-| Pillar | Stack | Branch | Status |
-|---|---|---|---|
-| **Traces** | broker → OTel Collector → Tempo → Grafana | `grafana-dt` | done |
-| **Metrics** | broker → Prometheus exporter → Prometheus → Grafana | `grafana-metrics` | planned |
-| **Logs** | broker syslog → OTel Collector → Loki → Grafana | `grafana-logs` | planned |
+```
+sdkperf / your clients ──SMF──> Solace broker (SEMP :8080)
+                                     │  monitor user (read-only)
+                                     v
+                        solace-prometheus-exporter (:9628)
+                          /solace-std  /solace-vpn-stats  /solace-det
+                                     │
+                                Prometheus (7d / 2GB retention, :9090)
+                                     │
+                                  Grafana (:3000)
+```
 
 ---
 
-## How this repository is organised
-
-**`main`** holds the combined setup — every pillar, integrated, in one stack. It is the
-end state, not the workbench.
-
-**Feature branches hold one pillar each.** All work happens on them. A branch contains
-only the stack for its pillar plus the shared foundation, so it can be brought up on its
-own and understood without reading around the other two.
-
-```
-main ──┬── grafana-dt          traces:  Tempo
-       ├── grafana-metrics     metrics: Prometheus
-       └── grafana-logs        logs:    Loki
-```
-
-Each branch carries its **own README**, written for that pillar: what it builds, how to
-start it, and how to verify it. Read the README on the branch you check out, not this
-one.
-
-### Working here
+## Quick start
 
 ```bash
-git checkout grafana-dt     # or another pillar branch
-cat README.md               # branch-specific quick start
+./stack.sh up
 ```
 
-Start new work by branching from `main`, never from another pillar branch. Pillars merge
-into `main` when they are complete and verified.
+First run copies `.env.example` to `.env` and stops so you can review it. Run
+`up` again and the stack comes up with the broker fully configured — VPN, a
+read-only monitor user for the exporter, an app user, and a demo queue are all
+applied automatically.
+
+```bash
+./stack.sh urls      # endpoints, credentials, and a ready-made sdkperf command
+./stack.sh verify    # checks every hop and tells you exactly what is broken
+```
+
+Dashboard: **http://localhost:3000** → Dashboards → **Solace Broker — Metrics**.
+
+Nothing needs redoing after a restart. `./stack.sh down` and `./stack.sh up`
+preserve the broker config, metrics history and Grafana's state. Only
+`./stack.sh reset` discards them, and it asks first.
 
 ---
 
-## Shared foundation
+## Commands
 
-`main` carries what every pillar branch inherits: this overview and a `.gitignore`
-covering secrets, certificates, kubeconfigs and runtime output.
+| Command | What it does |
+|---|---|
+| `./stack.sh up` | Start everything. Applies broker config automatically. |
+| `./stack.sh down` | Stop and remove containers. **Data is kept.** |
+| `./stack.sh stop` / `start` | Pause and resume without removing containers. |
+| `./stack.sh setup` | Re-apply broker configuration over SEMP. Idempotent. |
+| `./stack.sh verify` | Check every hop; prints the fix for whatever failed. |
+| `./stack.sh logs [service]` | Follow logs. |
+| `./stack.sh urls` | Endpoints, credentials, sdkperf command line. |
+| `./stack.sh reset` | **Destructive.** Delete all volumes and start over. |
 
-The stacks are derived from working OpenShift deployments. Those deployment notes are
-kept outside this repository — they describe live infrastructure and are not published
-here. What matters from them is folded into each branch's own README and design
-document.
+Run these from Git Bash or WSL on Windows.
 
 ---
 
-## Conventions
+## Sending traffic
 
-**Never commit secrets.** Every stack keeps its configuration in a gitignored `.env`,
-with a committed `.env.example` template carrying placeholder values only. Certificates,
-keys and kubeconfigs are excluded by `.gitignore`.
+The demo queue subscribes to `metrics/demo/>`. Anything published there shows
+up in the queue-depth panels:
 
-**Pin image tags.** No `:latest` anywhere. Collector config schemas change between
-releases, and a silent upgrade breaks a working pipeline at the worst possible time.
+```bash
+sdkperf_java.sh -cip=localhost:55555 -cu=appuser@test -cp=appuser_pw \
+                -ptl=metrics/demo/load -mn=1000 -mr=50
+```
 
-**Every stack must be verifiable in one command.** These pipelines fail silently —
-components report healthy while doing nothing. A stack you cannot verify is a stack you
-cannot trust.
+Or use the broker's own Try Me! at http://localhost:8080 → VPN `test` → Try
+Me! → Connect → Publish to `metrics/demo/anything`.
+
+---
+
+## Using your own broker
+
+Set in `.env`:
+
+```env
+BROKER_MODE=external
+SOLACE_SEMP_URL=http://your-broker.example.com:8080
+SOLACE_SEMP_HOST_URL=http://your-broker.example.com:8080
+```
+
+No broker container is created; the exporter, Prometheus and Grafana talk to
+yours instead. If you don't have admin, set `BOOTSTRAP_ENABLED=false` and
+create the VPN/queue and the read-only monitor user yourself —
+`scripts/broker-setup.sh` is readable as a specification of what it expects to
+exist for the VPN side; the monitor user itself is broker-level, not something
+this script can create over SEMP (see the comment at the top of that file).
+
+---
+
+## Configuration
+
+Everything lives in `.env`. Things worth knowing:
+
+- **`METRICS_RETENTION_TIME` / `METRICS_RETENTION_SIZE`** bound Prometheus's
+  local TSDB both ways — 7 days, 2GB by default. Whichever limit is hit first
+  wins.
+- Prometheus scrape intervals live in `config/prometheus/prometheus.yml`
+  directly, not `.env` — Prometheus's config format has no env-substitution
+  support, unlike Tempo's on the tracing branch.
+- **Image tags are pinned deliberately.** Never `:latest`.
+
+---
+
+## Troubleshooting
+
+`./stack.sh verify` diagnoses all of the below and prints the fix.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Exporter up, `/solace-std` has few/no `solace_*` lines | monitor user auth failing | check `SOLACE_MONITOR_PASSWORD` in `.env` matches what the broker booted with |
+| Queue panels empty | no demo queue, or nothing published yet | `./stack.sh setup`, then send traffic (see above) |
+| Grafana "No data" on traffic panels | nothing published recently | send traffic; `rate()` panels need recent activity |
+| Grafana password change has no effect | written to SQLite on first boot, ignored afterwards | `./stack.sh reset`, or change it inside Grafana |
+| Prometheus target down for one job | exporter unreachable or that endpoint erroring | `./stack.sh logs solace-exporter` |
+
+---
+
+## Layout
+
+```
+docker-compose.yaml            the stack
+.env.example                   every setting, documented
+stack.sh                       lifecycle wrapper
+config/
+  prometheus/prometheus.yml    scrape config — 3 jobs against the exporter
+  grafana/provisioning/        Prometheus datasource + the dashboard
+scripts/
+  broker-setup.sh              idempotent SEMP bootstrap (VPN, app user, demo queue)
+  verify.sh                    hop-by-hop checks
+```
+
+---
+
+## What is deliberately not here
+
+- **TLS.** Every hop is plaintext, matching the tracing branch and the
+  OpenShift first build.
+- **Alerting rules.** Dashboards only for this pass — can follow once the
+  dashboard itself is verified working.
+- **Long-term retention beyond 7 days.** Thanos/remote-write is out of scope
+  at this size, same call the OpenShift doc made for its cluster Prometheus.
+- **Traces and logs.** Metrics only — they live on their own branches
+  (`grafana-dt` for tracing).
+- **HA.** One broker, one exporter, one Prometheus.
