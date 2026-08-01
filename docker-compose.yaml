@@ -128,3 +128,30 @@ services:
     ports:
       - "${PORT_EXPORTER}:9628"
     restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Prometheus. Local filesystem TSDB on a named volume — the metrics-pillar
+  # analogue of Tempo's local-backend approach on the tracing branch.
+  #
+  # Retention bounded two ways (time AND size): time-based retention alone can
+  # still fill disk under a scrape-rate spike.
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: ${PROMETHEUS_IMAGE}
+    container_name: mobs-prometheus
+    hostname: prometheus
+    networks: [solace_metrics_net]
+    depends_on:
+      solace-exporter:
+        condition: service_started
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${METRICS_RETENTION_TIME}"
+      - "--storage.tsdb.retention.size=${METRICS_RETENTION_SIZE}"
+    ports:
+      - "${PORT_PROMETHEUS}:9090"       # query API and UI
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped

@@ -1,0 +1,48 @@
+# =============================================================================
+# Prometheus scrape config for the Solace metrics stack.
+#
+# Three jobs against the same exporter target, one per endpoint alias. Job
+# names double as the `job` label used to disambiguate metrics that the
+# exporter emits under more than one alias (e.g. solace_queue_msg_spooled
+# appears under both solace-vpn-stats and solace-det — the dashboard filters
+# by job to avoid double-counting).
+#
+# No env-substitution here: Prometheus's own config format doesn't support it
+# (unlike Tempo's -config.expand-env). Retention is a CLI flag instead, set
+# from .env in docker-compose.yaml's `command:`.
+# =============================================================================
+
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+scrape_configs:
+  # System, redundancy, config-sync, VPN config-level metrics.
+  - job_name: solace-std
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    metrics_path: /solace-std
+    static_configs:
+      - targets: ["solace-exporter:9628"]
+
+  # VPN traffic, per-client throughput, queue message-rate counters.
+  - job_name: solace-vpn-stats
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    metrics_path: /solace-vpn-stats
+    static_configs:
+      - targets: ["solace-exporter:9628"]
+
+  # Queue depth/binds/subscriptions detail. Slower interval: enumerating every
+  # queue is heavier on SEMP than the other two endpoints.
+  - job_name: solace-det
+    scrape_interval: 60s
+    scrape_timeout: 30s
+    metrics_path: /solace-det
+    static_configs:
+      - targets: ["solace-exporter:9628"]
+
+  # Prometheus's own health, for completeness.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
