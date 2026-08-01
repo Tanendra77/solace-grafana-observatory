@@ -130,6 +130,9 @@ Things worth knowing:
 - **`OTEL_LOG_LEVEL`** is `info`. Spans still print to the collector log at that level
   (the debug *exporter* logs at info). Raise it to `debug` only to diagnose the AMQP
   connection itself.
+- **`VERIFY_LOOKBACK_HOURS`** is how far back `verify` searches Tempo, defaulting to a
+  week. Too narrow a window makes a stack left idle overnight report perfectly good
+  traces as missing, which points the blame at the collector instead of the clock.
 - **Image tags are pinned deliberately.** The collector's config schema changes between
   releases, and `grafana/tempo:latest` is currently a v3.0.0 development build with no
   matching release tag.
@@ -154,6 +157,7 @@ understanding *why*.
 | Collector running, no spans anywhere | auth or ACL failure — the collector retries silently and never crashes | `./stack.sh verify`, then check the trace credentials |
 | Broker produces spans, queue keeps growing | collector not consuming | `./stack.sh logs otel-collector` |
 | Tempo returns no traces, but spans reached it | search with no time range covers only a narrow recent window | pass `start` / `end`, as `verify` does |
+| `verify` finds no traces after the stack sat idle | traffic is older than the search window | raise `VERIFY_LOOKBACK_HOURS`, or send fresh traffic |
 | Tempo `503` right after start | normal WAL replay and ring join | wait ~90s |
 | Grafana password change has no effect | written to SQLite on first boot, ignored afterwards | `./stack.sh reset`, or change it inside Grafana |
 | Broker container restarting in a loop | an invalid `username_admin_globalaccesslevel` value | must be `admin`, not `global/admin` |

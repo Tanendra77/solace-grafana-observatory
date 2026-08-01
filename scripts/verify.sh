@@ -253,12 +253,17 @@ fi
 
 # An explicit time range is required. /api/search with no start/end covers only
 # a narrow recent window, so traces that are minutes old return an empty result
-# and look like a broken pipeline. Ask for the last 24h.
-NOW=$(date +%s); DAY_AGO=$((NOW - 86400))
-search=$(curl -s -m 15 "http://localhost:${PORT_TEMPO}/api/search?limit=20&start=${DAY_AGO}&end=${NOW}" 2>/dev/null)
+# and look like a broken pipeline.
+#
+# The window also has to be generous. Too narrow and a stack left idle
+# overnight reports perfectly good traces as missing, which points the blame at
+# the collector instead of at the clock.
+LOOKBACK=$(( ${VERIFY_LOOKBACK_HOURS:-168} * 3600 ))
+NOW=$(date +%s); SINCE=$((NOW - LOOKBACK))
+search=$(curl -s -m 15 "http://localhost:${PORT_TEMPO}/api/search?limit=20&start=${SINCE}&end=${NOW}" 2>/dev/null)
 if printf '%s' "$search" | grep -q '"traceID"'; then
   n=$(printf '%s' "$search" | grep -o '"traceID"' | wc -l | tr -d ' ')
-  pass "Tempo has ingested traces (${n} in the last 24h)"
+  pass "Tempo has ingested traces (${n} in the last ${VERIFY_LOOKBACK_HOURS:-168}h)"
   root=$(field "$search" rootTraceName)
   [ -n "$root" ] && printf '         %smost recent: %s%s\n' "$DIM" "$root" "$RST"
 elif [ "${TRAFFIC_SEEN:-false}" = "true" ]; then
@@ -318,8 +323,8 @@ section "7. Persistence"
     fail "datasource did not survive the restart (before='$before' after='$after')" \
          "Grafana is probably not on its named volume"
   fi
-  NOW=$(date +%s); DAY_AGO=$((NOW - 86400))
-  if curl -s -m 15 "http://localhost:${PORT_TEMPO}/api/search?limit=20&start=${DAY_AGO}&end=${NOW}" \
+  NOW=$(date +%s); SINCE=$((NOW - $(( ${VERIFY_LOOKBACK_HOURS:-168} * 3600 )) ))
+  if curl -s -m 15 "http://localhost:${PORT_TEMPO}/api/search?limit=20&start=${SINCE}&end=${NOW}" \
        2>/dev/null | grep -q '"traceID"'; then
     pass "traces survived the restart"
   else
