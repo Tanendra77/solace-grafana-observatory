@@ -26,7 +26,7 @@ services:
   #
   # Only started when BROKER_MODE=local (profile: local-broker). In external
   # mode this service is never created and the rest of the stack talks to
-  # whatever SOLACE_BROKER_HOST points at.
+  # whatever SOLACE_SEMP_URL points at.
   #
   # The `monitor` SEMP user is created here, not in broker-setup.sh: it is a
   # broker-level identity (like `admin`), not a Message-VPN-scoped client

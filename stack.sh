@@ -29,7 +29,7 @@ load_env() {
     printf '\n'
     printf '%sEdit .env before continuing.%s At minimum review the credentials\n' "$BOLD" "$RST"
     printf 'and, if you are using your own broker, set BROKER_MODE=external plus\n'
-    printf 'the SOLACE_BROKER_HOST / SOLACE_SEMP_URL values.\n\n'
+    printf 'the SOLACE_SEMP_URL / SOLACE_SEMP_HOST_URL values.\n\n'
     printf 'Then re-run: %s./stack.sh %s%s\n' "$DIM" "${1:-up}" "$RST"
     exit 1
   fi

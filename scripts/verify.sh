@@ -21,6 +21,8 @@ else
   BOLD=''; DIM=''; RED=''; GRN=''; YLW=''; RST=''
 fi
 
+[ -f .env ] || { echo "no .env found — run ./stack.sh up first, or create one from .env.example"; exit 1; }
+
 set -a
 # shellcheck disable=SC1091
 . ./.env
@@ -126,6 +128,20 @@ if printf '%s' "$q" | grep -q '"resultType":"vector"' && printf '%s' "$q" | grep
   pass "Prometheus has ingested solace_system_redundancy_up"
 else
   fail "Prometheus query for solace_system_redundancy_up returned no data" "./stack.sh logs prometheus"
+fi
+
+qdet=$(curl -s -m 10 "http://localhost:${PORT_PROMETHEUS}/api/v1/query?query=solace_queue_spool_usage_msgs%7Bqueue_name%3D%22${SOLACE_DEMO_QUEUE}%22%7D" 2>/dev/null)
+if printf '%s' "$qdet" | grep -q '"resultType":"vector"' && printf '%s' "$qdet" | grep -q '"value"'; then
+  pass "Prometheus has ingested queue-level metrics (solace-det)"
+else
+  fail "Prometheus query for solace_queue_spool_usage_msgs{queue_name=\"${SOLACE_DEMO_QUEUE}\"} returned no data" "./stack.sh logs prometheus"
+fi
+
+qvpn=$(curl -s -m 10 "http://localhost:${PORT_PROMETHEUS}/api/v1/query?query=solace_vpn_rx_msgs_total%7Bjob%3D%22solace-vpn-stats%22%7D" 2>/dev/null)
+if printf '%s' "$qvpn" | grep -q '"resultType":"vector"' && printf '%s' "$qvpn" | grep -q '"value"'; then
+  pass "Prometheus has ingested VPN traffic metrics (solace-vpn-stats)"
+else
+  fail "Prometheus query for solace_vpn_rx_msgs_total{job=\"solace-vpn-stats\"} returned no data" "./stack.sh logs prometheus"
 fi
 
 # -----------------------------------------------------------------------------

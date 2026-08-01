@@ -60,6 +60,7 @@ preserve the broker config, metrics history and Grafana's state. Only
 | `./stack.sh verify` | Check every hop; prints the fix for whatever failed. |
 | `./stack.sh logs [service]` | Follow logs. |
 | `./stack.sh urls` | Endpoints, credentials, sdkperf command line. |
+| `./stack.sh ps` | Show container status. |
 | `./stack.sh reset` | **Destructive.** Delete all volumes and start over. |
 
 Run these from Git Bash or WSL on Windows.

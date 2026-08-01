@@ -62,7 +62,7 @@ n=0
 until curl -s -f -m 5 -u "$AUTH" -o /dev/null "$SEMP/about/api"; do
   n=$((n + 1))
   if [ "$n" -ge 60 ]; then
-    die "broker did not answer at $SEMP after 5 minutes.
+    die "broker did not answer at $SEMP after 10 minutes.
        - local mode:    check 'docker logs mobs-solbroker'
        - external mode: check SOLACE_SEMP_URL is reachable from inside the
                         docker network, and that the admin credentials are right"
