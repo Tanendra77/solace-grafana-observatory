@@ -33,6 +33,9 @@ doc/
 docs/
 notes/
 
+# Subagent-driven-development scratch state (ledgers, briefs, review packages).
+.superpowers/
+
 # =============================================================================
 # Runtime output
 # =============================================================================
