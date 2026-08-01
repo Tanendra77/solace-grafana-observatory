@@ -1,0 +1,17 @@
+# =============================================================================
+# Dashboard file-provider — loads every .json in this directory on Grafana
+# start, same declarative-from-file approach as the datasource.
+# =============================================================================
+
+apiVersion: 1
+
+providers:
+  - name: Solace
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
