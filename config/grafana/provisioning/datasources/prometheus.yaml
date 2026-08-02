@@ -1,9 +1,5 @@
-# =============================================================================
-# Prometheus datasource — provisioned from file so it can't drift out of sync
-# after a database reset, same pattern as the Tempo datasource on grafana-dt.
-# No auth: Prometheus is unauthenticated inside the compose network.
-# =============================================================================
-
+# Prometheus datasource — provisioned from file, HTTPS with the same
+# self-signed cert as the rest of the stack (tlsSkipVerify accordingly).
 apiVersion: 1
 
 datasources:
@@ -11,8 +7,9 @@ datasources:
     type: prometheus
     uid: prometheus-solace
     access: proxy
-    url: http://prometheus:9090
+    url: https://prometheus:9090
     isDefault: true
     editable: false
     jsonData:
       timeInterval: 30s
+      tlsSkipVerify: true

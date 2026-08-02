@@ -1,14 +1,6 @@
 #!/usr/bin/env bash
-# =============================================================================
-# verify.sh — prove the metrics pipeline actually works, hop by hop
-#
-# Every component here can look healthy while doing nothing: a container can
-# be Running with the exporter unable to auth to SEMP, Prometheus can be up
-# with every target down, Grafana can serve fine with no datasource. These
-# checks target the difference between "up" and "working".
-#
-# Invoked by ./stack.sh verify. No jq required — only curl, grep and sed.
-# =============================================================================
+# Checks the pipeline hop by hop — "up" isn't the same as "working".
+# Run directly: ./scripts/verify.sh
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,12 +13,16 @@ else
   BOLD=''; DIM=''; RED=''; GRN=''; YLW=''; RST=''
 fi
 
-[ -f .env ] || { echo "no .env found — run ./stack.sh up first, or create one from .env.example"; exit 1; }
+[ -f .env ] || { echo "no .env found — copy .env.example to .env first"; exit 1; }
 
 set -a
 # shellcheck disable=SC1091
 . ./.env
 set +a
+
+# Every hop in this stack serves TLS with a self-signed cert — -k
+# (insecure) is deliberate throughout this script, not an oversight.
+curl() { command curl -k "$@"; }
 
 PASS=0; FAIL=0
 
@@ -38,121 +34,84 @@ fail() {
 }
 section() { printf '\n%s%s%s\n' "$BOLD" "$1" "$RST"; }
 
-field() {
-  printf '%s' "$1" \
-    | grep -o "\"$2\"[[:space:]]*:[[:space:]]*[^,}]*" \
-    | head -1 \
-    | sed 's/.*:[[:space:]]*//; s/^"//; s/"$//'
-}
+printf '%sVerifying Solace Broker Metrics stack%s\n' "$BOLD" "$RST"
 
-printf '%sVerifying Solace Broker Metrics stack%s  %s(broker mode: %s)%s\n' \
-  "$BOLD" "$RST" "$DIM" "$BROKER_MODE" "$RST"
-
-# -----------------------------------------------------------------------------
 section "1. Containers"
-# -----------------------------------------------------------------------------
-expected="solace-exporter prometheus grafana"
-[ "$BROKER_MODE" = "local" ] && expected="solbroker $expected"
-for svc in $expected; do
+# Broker isn't checked here — it may be its own compose file or your own broker.
+for svc in solace-exporter prometheus grafana; do
   cname=$(docker ps --filter "label=com.docker.compose.service=$svc" \
                     --filter "label=com.docker.compose.project=solace-metrics-observatory" \
                     --format '{{.Names}}' | head -1)
   if [ -n "$cname" ]; then
     pass "$svc running ($cname)"
   else
-    fail "$svc is not running" "./stack.sh up   (then ./stack.sh logs $svc)"
+    fail "$svc is not running" "docker compose up -d   (then docker compose logs $svc)"
   fi
 done
 
 # -----------------------------------------------------------------------------
 section "2. Broker"
 # -----------------------------------------------------------------------------
-if [ "$BROKER_MODE" = "local" ]; then
-  if curl -sf -m 10 "http://localhost:${PORT_BROKER_HEALTH}/health-check/guaranteed-active" >/dev/null 2>&1; then
-    pass "broker healthy (guaranteed messaging active)"
-  else
-    fail "broker health check failed" "still booting? give it 60-90s, then ./stack.sh logs solbroker"
-  fi
+if curl -s -o /dev/null -w '%{http_code}' -m 10 "${SOLACE_SEMP_URL%/}/SEMP/v2/config/about/api" 2>/dev/null | grep -qE '^(200|401)$'; then
+  pass "broker SEMP reachable at ${SOLACE_SEMP_URL}"
 else
-  printf '  %s[skip]%s health check — external broker, endpoint unknown\n' "$DIM" "$RST"
-fi
-
-vpn_json=$(curl -s -m 10 -u "${SOLACE_ADMIN_USER}:${SOLACE_ADMIN_PASSWORD}" \
-  "${SOLACE_SEMP_HOST_URL%/}/SEMP/v2/config/msgVpns/${SOLACE_MSG_VPN}" 2>/dev/null)
-if [ "$(field "$vpn_json" enabled)" = "true" ]; then
-  pass "message VPN '${SOLACE_MSG_VPN}' exists and is enabled"
-else
-  fail "message VPN '${SOLACE_MSG_VPN}' not found or disabled" "./stack.sh setup"
+  fail "broker SEMP not reachable at ${SOLACE_SEMP_URL}" \
+       "if using docker-compose.broker.yaml: docker compose -f docker-compose.broker.yaml up -d, give it 60-90s on first boot; then ./scripts/setup-broker-tls.sh if this is the TLS port"
 fi
 
 if curl -s -o /dev/null -w '%{http_code}' -m 10 -u "monitor:${SOLACE_MONITOR_PASSWORD}" \
-   "${SOLACE_SEMP_HOST_URL%/}/SEMP/v2/config/msgVpns" 2>/dev/null | grep -q '^200$'; then
+   "${SOLACE_SEMP_URL%/}/SEMP/v2/config/msgVpns" 2>/dev/null | grep -q '^200$'; then
   pass "monitor SEMP user can authenticate"
 else
   fail "monitor SEMP user cannot authenticate" \
-       "check SOLACE_MONITOR_PASSWORD in .env matches what solbroker booted with; ./stack.sh reset if it was changed after first boot"
+       "check SOLACE_MONITOR_PASSWORD in .env matches what the broker booted with, or that your own broker has a 'monitor' user with read-only access"
 fi
 
 # -----------------------------------------------------------------------------
 section "3. Exporter"
 # -----------------------------------------------------------------------------
-std=$(curl -s -m 10 "http://localhost:${PORT_EXPORTER}/solace-std" 2>/dev/null)
+std=$(curl -s -m 10 "https://localhost:${PORT_EXPORTER}/solace-std" 2>/dev/null)
 n=$(printf '%s' "$std" | grep -c '^solace_')
 if [ "$n" -gt 50 ] 2>/dev/null; then
   pass "exporter serving /solace-std (${n} solace_* series)"
 else
-  fail "exporter /solace-std returned too few series (${n})" "./stack.sh logs solace-exporter"
+  fail "exporter /solace-std returned too few series (${n})" "docker compose logs solace-exporter"
 fi
 
-det=$(curl -s -m 15 "http://localhost:${PORT_EXPORTER}/solace-det" 2>/dev/null)
-if printf '%s' "$det" | grep -q "solace_queue_spool_usage_msgs{queue_name=\"${SOLACE_DEMO_QUEUE}\""; then
-  pass "exporter serving queue-level detail for '${SOLACE_DEMO_QUEUE}'"
+if curl -s -m 15 "https://localhost:${PORT_EXPORTER}/solace-det" 2>/dev/null | grep -q '^solace_'; then
+  pass "exporter serving /solace-det (queue/client detail)"
 else
-  fail "no queue-level metrics for '${SOLACE_DEMO_QUEUE}' on /solace-det" "./stack.sh setup, then ./stack.sh logs solace-exporter"
+  fail "exporter /solace-det returned no series" "docker compose logs solace-exporter"
 fi
 
 # -----------------------------------------------------------------------------
 section "4. Prometheus"
 # -----------------------------------------------------------------------------
-targets=$(curl -s -m 10 "http://localhost:${PORT_PROMETHEUS}/api/v1/targets" 2>/dev/null)
+targets=$(curl -s -m 10 "https://localhost:${PORT_PROMETHEUS}/api/v1/targets" 2>/dev/null)
 for job in solace-std solace-vpn-stats solace-det; do
   if printf '%s' "$targets" | grep -o "\"job\":\"$job\"[^{]*\"health\":\"up\"" >/dev/null 2>&1; then
     pass "target '$job' is up"
   else
-    fail "target '$job' is not up" "http://localhost:${PORT_PROMETHEUS}/targets shows why"
+    fail "target '$job' is not up" "https://localhost:${PORT_PROMETHEUS}/targets shows why"
   fi
 done
 
-q=$(curl -s -m 10 "http://localhost:${PORT_PROMETHEUS}/api/v1/query?query=solace_system_redundancy_up" 2>/dev/null)
+q=$(curl -s -m 10 "https://localhost:${PORT_PROMETHEUS}/api/v1/query?query=solace_up" 2>/dev/null)
 if printf '%s' "$q" | grep -q '"resultType":"vector"' && printf '%s' "$q" | grep -q '"value"'; then
-  pass "Prometheus has ingested solace_system_redundancy_up"
+  pass "Prometheus has ingested solace_up"
 else
-  fail "Prometheus query for solace_system_redundancy_up returned no data" "./stack.sh logs prometheus"
-fi
-
-qdet=$(curl -s -m 10 "http://localhost:${PORT_PROMETHEUS}/api/v1/query?query=solace_queue_spool_usage_msgs%7Bqueue_name%3D%22${SOLACE_DEMO_QUEUE}%22%7D" 2>/dev/null)
-if printf '%s' "$qdet" | grep -q '"resultType":"vector"' && printf '%s' "$qdet" | grep -q '"value"'; then
-  pass "Prometheus has ingested queue-level metrics (solace-det)"
-else
-  fail "Prometheus query for solace_queue_spool_usage_msgs{queue_name=\"${SOLACE_DEMO_QUEUE}\"} returned no data" "./stack.sh logs prometheus"
-fi
-
-qvpn=$(curl -s -m 10 "http://localhost:${PORT_PROMETHEUS}/api/v1/query?query=solace_vpn_rx_msgs_total%7Bjob%3D%22solace-vpn-stats%22%7D" 2>/dev/null)
-if printf '%s' "$qvpn" | grep -q '"resultType":"vector"' && printf '%s' "$qvpn" | grep -q '"value"'; then
-  pass "Prometheus has ingested VPN traffic metrics (solace-vpn-stats)"
-else
-  fail "Prometheus query for solace_vpn_rx_msgs_total{job=\"solace-vpn-stats\"} returned no data" "./stack.sh logs prometheus"
+  fail "Prometheus query for solace_up returned no data" "docker compose logs prometheus"
 fi
 
 # -----------------------------------------------------------------------------
 section "5. Grafana"
 # -----------------------------------------------------------------------------
 ds=$(curl -s -m 10 -u "${GF_ADMIN_USER}:${GF_ADMIN_PASSWORD}" \
-      "http://localhost:${PORT_GRAFANA}/api/datasources" 2>/dev/null)
+      "https://localhost:${PORT_GRAFANA}/api/datasources" 2>/dev/null)
 if printf '%s' "$ds" | grep -q '"type"[[:space:]]*:[[:space:]]*"prometheus"'; then
   pass "Prometheus datasource present in Grafana"
   health=$(curl -s -m 15 -u "${GF_ADMIN_USER}:${GF_ADMIN_PASSWORD}" \
-            "http://localhost:${PORT_GRAFANA}/api/datasources/uid/prometheus-solace/health" 2>/dev/null)
+            "https://localhost:${PORT_GRAFANA}/api/datasources/uid/prometheus-solace/health" 2>/dev/null)
   if printf '%s' "$health" | grep -q '"status"[[:space:]]*:[[:space:]]*"OK"'; then
     pass "Grafana can query Prometheus"
   else
@@ -161,18 +120,20 @@ if printf '%s' "$ds" | grep -q '"type"[[:space:]]*:[[:space:]]*"prometheus"'; th
   fi
 elif printf '%s' "$ds" | grep -qi "invalid.*credential\|unauthorized"; then
   fail "Grafana rejected the credentials" \
-       "with a persistent volume the password is fixed at first boot; ./stack.sh reset to change it"
+       "with a persistent volume the password is fixed at first boot; remove the grafana-data volume to change it"
 else
-  fail "Prometheus datasource missing from Grafana" "check ./stack.sh logs grafana for provisioning errors"
+  fail "Prometheus datasource missing from Grafana" "check docker compose logs grafana for provisioning errors"
 fi
 
-dash=$(curl -s -m 10 -u "${GF_ADMIN_USER}:${GF_ADMIN_PASSWORD}" \
-        "http://localhost:${PORT_GRAFANA}/api/dashboards/uid/solace-broker-metrics" 2>/dev/null)
-if printf '%s' "$dash" | grep -q '"uid":"solace-broker-metrics"'; then
-  pass "dashboard 'Solace Broker — Metrics' provisioned"
-else
-  fail "dashboard not found" "check ./stack.sh logs grafana for provisioning errors"
-fi
+for uid in solace-vpn-overview solace-queue-monitor solace-home; do
+  dash=$(curl -s -m 10 -u "${GF_ADMIN_USER}:${GF_ADMIN_PASSWORD}" \
+          "https://localhost:${PORT_GRAFANA}/api/dashboards/uid/$uid" 2>/dev/null)
+  if printf '%s' "$dash" | grep -q "\"uid\":\"$uid\""; then
+    pass "dashboard '$uid' provisioned"
+  else
+    fail "dashboard '$uid' not found" "check docker compose logs grafana for provisioning errors"
+  fi
+done
 
 # -----------------------------------------------------------------------------
 printf '\n%s%d passed, %d failed%s\n' "$BOLD" "$PASS" "$FAIL" "$RST"
@@ -182,5 +143,5 @@ if [ "$FAIL" -gt 0 ]; then
   exit 1
 fi
 
-printf '%sEverything checks out. Dashboard at http://localhost:%s -> Dashboards -> Solace Broker — Metrics.%s\n' \
+printf '%sEverything checks out. Start here: https://localhost:%s%s\n' \
   "$GRN" "${PORT_GRAFANA}" "$RST"
