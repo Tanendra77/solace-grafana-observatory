@@ -1,8 +1,6 @@
 # =============================================================================
-# Overlay enabling the JSONL trace sink.
-#
-# stack.sh adds this automatically when TRACE_FILE_ENABLED=true. To use raw
-# compose instead:
+# Overlay enabling the JSONL trace sink. Layer it in when
+# TRACE_FILE_ENABLED=true:
 #
 #   docker compose -f docker-compose.yaml -f docker-compose.jsonl.yaml up -d
 #

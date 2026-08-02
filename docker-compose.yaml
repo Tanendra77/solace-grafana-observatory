@@ -1,10 +1,9 @@
 # =============================================================================
-# Solace Distributed Tracing Observatory — local stack
+# Solace Distributed Tracing Observatory
+#   otel-collector -> tempo -> grafana
 #
-#   solbroker -> otel-collector -> tempo -> grafana
-#
-# All configuration lives in .env. Prefer ./stack.sh over raw compose: it
-# derives COMPOSE_PROFILES from BROKER_MODE and layers in the JSONL override.
+# Talks to a broker started separately (docker-compose.broker.yaml, or your own).
+# Run ./scripts/setup-broker-tracing.sh once against it before `up` — see README.
 # =============================================================================
 
 name: solace-dt-observatory
@@ -15,108 +14,21 @@ networks:
     driver: bridge
 
 volumes:
-  solace-storage:     # broker config + message spool — survives down/up
   tempo-data:         # trace blocks + WAL
   grafana-data:       # Grafana SQLite: users, dashboards, datasource state
 
 services:
-
-  # ---------------------------------------------------------------------------
-  # Solace PubSub+ broker.
-  #
-  # Only started when BROKER_MODE=local (profile: local-broker). In external
-  # mode this service is never created and the rest of the stack talks to
-  # whatever SOLACE_BROKER_HOST points at.
-  # ---------------------------------------------------------------------------
-  solbroker:
-    image: ${SOLACE_IMAGE}
-    container_name: dtobs-solbroker
-    hostname: solbroker
-    profiles: ["local-broker"]
-    networks: [solace_dt_net]
-    environment:
-      - username_admin_globalaccesslevel=admin
-      - username_admin_password=${SOLACE_ADMIN_PASSWORD}
-      - system_scaling_maxconnectioncount=100
-      - webmanager_redirecthttp_enable=false
-    ports:
-      - "${PORT_BROKER_SEMP}:8080"      # web UI + SEMP API
-      - "${PORT_BROKER_SMF}:55555"      # SMF — sdkperf connects here
-      - "${PORT_BROKER_AMQP}:5672"      # AMQP — collector's path to the queue
-      - "${PORT_BROKER_HEALTH}:5550"    # health check
-      - "${PORT_BROKER_SSH}:2222"       # broker CLI over SSH
-      - "${PORT_BROKER_WEB}:8008"       # web messaging
-    volumes:
-      - solace-storage:/var/lib/solace
-    shm_size: 2g
-    ulimits:
-      memlock: -1
-      nofile:
-        soft: 2448
-        hard: 1048576
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5550/health-check/guaranteed-active"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-      # First boot builds the config database and can take a couple of minutes
-      # on a cold volume. Too short a start_period reads as a broken broker.
-      start_period: 150s
-    restart: unless-stopped
-
-  # ---------------------------------------------------------------------------
-  # One-shot broker configuration over SEMP v2.
-  #
-  # Creates the VPN, moves AMQP onto it, sets up the telemetry profile, the
-  # trace filter and both client usernames. Idempotent — safe on every `up`.
-  #
-  # Deliberately has NO depends_on: in external mode `solbroker` does not exist,
-  # so the script polls SEMP itself until the broker answers. That works
-  # identically for a container and a remote broker.
-  # ---------------------------------------------------------------------------
-  broker-bootstrap:
-    image: ${CURL_IMAGE}
-    container_name: dtobs-bootstrap
-    networks: [solace_dt_net]
-    entrypoint: ["/bin/sh", "/scripts/broker-setup.sh"]
-    environment:
-      - BOOTSTRAP_ENABLED=${BOOTSTRAP_ENABLED}
-      - SOLACE_SEMP_URL=${SOLACE_SEMP_URL}
-      - SOLACE_ADMIN_USER=${SOLACE_ADMIN_USER}
-      - SOLACE_ADMIN_PASSWORD=${SOLACE_ADMIN_PASSWORD}
-      - SOLACE_MSG_VPN=${SOLACE_MSG_VPN}
-      - SOLACE_VPN_SPOOL_MB=${SOLACE_VPN_SPOOL_MB}
-      - SOLACE_BROKER_AMQP_PORT=${SOLACE_BROKER_AMQP_PORT}
-      - SOLACE_TRACE_USER=${SOLACE_TRACE_USER}
-      - SOLACE_TRACE_PASSWORD=${SOLACE_TRACE_PASSWORD}
-      - SOLACE_APP_USER=${SOLACE_APP_USER}
-      - SOLACE_APP_PASSWORD=${SOLACE_APP_PASSWORD}
-      - TELEMETRY_PROFILE_NAME=${TELEMETRY_PROFILE_NAME}
-      - TRACE_FILTER_SUBSCRIPTION=${TRACE_FILTER_SUBSCRIPTION}
-      - TELEMETRY_QUEUE_SPOOL_MB=${TELEMETRY_QUEUE_SPOOL_MB}
-    volumes:
-      - ./scripts:/scripts:ro
-    restart: "no"
-
-  # ---------------------------------------------------------------------------
   # OTel Collector — the Solace -> OTLP bridge.
-  #
-  # Must be the contrib distribution: the `solace` receiver ships only there.
-  #
-  # Gates on broker-bootstrap completing, not merely starting. Launch the
-  # collector before the telemetry queue exists and it drops into a silent
-  # retry loop while reporting itself perfectly healthy.
-  # ---------------------------------------------------------------------------
   otel-collector:
     image: ${OTELCOL_IMAGE}
     container_name: dtobs-otelcol
     hostname: otel-collector
     networks: [solace_dt_net]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     user: "${COLLECTOR_UID}:${COLLECTOR_GID}"
     command: ["--config=/etc/otel/collector.yaml"]
     depends_on:
-      broker-bootstrap:
-        condition: service_completed_successfully
       tempo:
         condition: service_started
     environment:
@@ -146,18 +58,7 @@ services:
       - ./trace-data:/trace-data
     restart: unless-stopped
 
-  # ---------------------------------------------------------------------------
-  # Tempo — trace store. Local filesystem backend on a named volume, which is
-  # the direct analogue of TempoMonolithic's `backend: pv`. No object store.
-  #
-  # user 0:0 because the image runs as uid 10001 and a freshly created named
-  # volume is root-owned; Tempo would fail to write and never open its port.
-  # This is the local form of the OpenShift fsGroup trap. Acceptable for a
-  # local dev stack; revisit if this is ever exposed.
-  #
-  # No healthcheck: the image is distroless, so there is no shell or curl
-  # inside to run one with. `stack.sh verify` checks :3200/ready from the host.
-  # ---------------------------------------------------------------------------
+  # Tempo — trace store. Local filesystem backend on a named volume
   tempo:
     image: ${TEMPO_IMAGE}
     container_name: dtobs-tempo
@@ -178,10 +79,7 @@ services:
     # Tempo's own OTLP port is intentionally NOT published. Host 4317/4318
     # belong to the collector, so there is exactly one OTLP endpoint to aim at.
 
-  # ---------------------------------------------------------------------------
-  # Grafana. The Tempo datasource is provisioned from a file, replacing the
-  # GrafanaDatasource CR — declarative, in git, no operator reconcile loop.
-  # ---------------------------------------------------------------------------
+  # Grafana. The Tempo datasource is provisioned from a file
   grafana:
     image: ${GRAFANA_IMAGE}
     container_name: dtobs-grafana

@@ -1,0 +1,49 @@
+# Standalone Solace PubSub+ broker for the DT Observatory.
+# Start this first (docker compose -f docker-compose.broker.yaml up -d), or
+# point .env at a broker you already have and skip this file entirely.
+
+name: solace-dt-broker
+
+networks:
+  solace_dt_broker_net:
+    name: solace_dt_broker_net
+    driver: bridge
+
+volumes:
+  solace-storage:     # broker config + message spool — survives down/up
+
+services:
+  solbroker:
+    image: ${SOLACE_IMAGE}
+    container_name: dtobs-solbroker
+    hostname: solbroker
+    networks: [solace_dt_broker_net]
+    environment:
+      - username_admin_globalaccesslevel=admin
+      - username_admin_password=${SOLACE_ADMIN_PASSWORD}
+      - system_scaling_maxconnectioncount=100
+      - webmanager_redirecthttp_enable=false
+    ports:
+      - "${PORT_BROKER_SEMP}:8080"      # web UI + SEMP API
+      - "${PORT_BROKER_SMF}:55555"      # SMF — sdkperf connects here
+      - "${PORT_BROKER_AMQP}:5672"      # AMQP — the collector's path to the queue
+      - "${PORT_BROKER_HEALTH}:5550"    # health check
+      - "${PORT_BROKER_SSH}:2222"       # broker CLI over SSH
+      - "${PORT_BROKER_WEB}:8008"       # web messaging
+    volumes:
+      - solace-storage:/var/lib/solace
+    shm_size: 2g
+    ulimits:
+      memlock: -1
+      nofile:
+        soft: 2448
+        hard: 1048576
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5550/health-check/guaranteed-active"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      # First boot builds the config database and can take a couple of minutes
+      # on a cold volume. Too short a start_period reads as a broken broker.
+      start_period: 150s
+    restart: unless-stopped
