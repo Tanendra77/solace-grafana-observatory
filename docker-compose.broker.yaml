@@ -1,0 +1,46 @@
+# Standalone Solace broker — separate from docker-compose.yaml so any pillar
+# can point at it instead of bundling its own copy. Skip this file if you
+# already have a broker; just set SOLACE_SEMP_URL in .env.
+#
+#   docker compose -f docker-compose.broker.yaml up -d
+
+name: solace-broker
+
+volumes:
+  solace-storage:      # broker config + message spool — survives down/up
+
+services:
+  solbroker:
+    image: ${SOLACE_IMAGE}
+    container_name: solace-broker-solbroker
+    hostname: solbroker
+    environment:
+      - username_admin_globalaccesslevel=admin
+      - username_admin_password=${SOLACE_ADMIN_PASSWORD}
+      # read-only user for the exporter
+      - username_monitor_globalaccesslevel=read-only
+      - username_monitor_password=${SOLACE_MONITOR_PASSWORD}
+      - system_scaling_maxconnectioncount=100
+      - webmanager_redirecthttp_enable=false
+    ports:
+      - "${PORT_BROKER_SEMP}:8080"      # web UI + SEMP API (plaintext)
+      - "${PORT_BROKER_SEMP_TLS}:1943"  # SEMP API over TLS — used by the exporter once ./scripts/setup-broker-tls.sh has run
+      - "${PORT_BROKER_SMF}:55555"      # SMF — sdkperf connects here
+      - "${PORT_BROKER_HEALTH}:5550"    # health check
+      - "${PORT_BROKER_SSH}:2222"       # broker CLI over SSH
+      - "${PORT_BROKER_WEB}:8008"       # web messaging
+    volumes:
+      - solace-storage:/var/lib/solace
+    shm_size: 2g
+    ulimits:
+      memlock: -1
+      nofile:
+        soft: 2448
+        hard: 1048576
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5550/health-check/guaranteed-active"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 150s   # cold-volume first boot takes a couple minutes
+    restart: unless-stopped
