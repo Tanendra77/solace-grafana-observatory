@@ -10,7 +10,7 @@
 # Tempo answers /ready with an empty store. These checks target the difference
 # between "up" and "working".
 #
-# Invoked by ./stack.sh verify. No jq required — only curl, grep and sed.
+# Run directly: ./scripts/verify.sh. No jq required — only curl, grep and sed.
 # =============================================================================
 set -uo pipefail
 
@@ -62,9 +62,9 @@ field() {
     | sed 's/.*:[[:space:]]*//; s/^"//; s/"$//'
 }
 
-SEMP="${SOLACE_SEMP_HOST_URL%/}/SEMP/v2/config"
+SEMP="${SOLACE_SEMP_URL%/}/SEMP/v2/config"
 # Telemetry queues are broker-internal and appear only in the monitor API.
-SEMP_MON="${SOLACE_SEMP_HOST_URL%/}/SEMP/v2/monitor"
+SEMP_MON="${SOLACE_SEMP_URL%/}/SEMP/v2/monitor"
 AUTH="${SOLACE_ADMIN_USER}:${SOLACE_ADMIN_PASSWORD}"
 VPN="${SOLACE_MSG_VPN}"
 PROFILE="${TELEMETRY_PROFILE_NAME}"
@@ -73,33 +73,41 @@ TELEMETRY_QUEUE="#telemetry-${PROFILE}"
 semp_get()     { curl -s -m 10 -u "$AUTH" "$SEMP$1" 2>/dev/null; }
 semp_mon_get() { curl -s -m 10 -u "$AUTH" "$SEMP_MON$1" 2>/dev/null; }
 
-printf '%sVerifying Solace DT Observatory%s  %s(broker mode: %s)%s\n' \
-  "$BOLD" "$RST" "$DIM" "$BROKER_MODE" "$RST"
+printf '%sVerifying Solace DT Observatory%s\n' "$BOLD" "$RST"
 
 # -----------------------------------------------------------------------------
 section "1. Containers"
 # -----------------------------------------------------------------------------
-expected="otel-collector tempo grafana"
-[ "$BROKER_MODE" = "local" ] && expected="solbroker $expected"
-for svc in $expected; do
+for svc in otel-collector tempo grafana; do
   cname=$(docker ps --filter "label=com.docker.compose.service=$svc" \
                     --filter "label=com.docker.compose.project=solace-dt-observatory" \
                     --format '{{.Names}}' | head -1)
   if [ -n "$cname" ]; then
     pass "$svc running ($cname)"
   else
-    fail "$svc is not running" "./stack.sh up   (then ./stack.sh logs $svc)"
+    fail "$svc is not running" "docker compose up -d   (then docker compose logs $svc)"
   fi
 done
+
+broker_cname=$(docker ps --filter "label=com.docker.compose.service=solbroker" \
+                  --filter "label=com.docker.compose.project=solace-dt-broker" \
+                  --format '{{.Names}}' | head -1)
+if [ -n "$broker_cname" ]; then
+  pass "solbroker running ($broker_cname)"
+  BROKER_LOCAL=true
+else
+  skip "solbroker container not found — assuming an external broker"
+  BROKER_LOCAL=false
+fi
 
 # -----------------------------------------------------------------------------
 section "2. Broker"
 # -----------------------------------------------------------------------------
-if [ "$BROKER_MODE" = "local" ]; then
+if [ "$BROKER_LOCAL" = "true" ]; then
   if curl -sf -m 10 "http://localhost:${PORT_BROKER_HEALTH}/health-check/guaranteed-active" >/dev/null 2>&1; then
     pass "broker healthy (guaranteed messaging active)"
   else
-    fail "broker health check failed" "still booting? give it 60-90s, then ./stack.sh logs solbroker"
+    fail "broker health check failed" "still booting? give it 60-90s, then docker compose -f docker-compose.broker.yaml logs solbroker"
   fi
 else
   skip "health check — external broker, endpoint unknown"
@@ -110,10 +118,10 @@ if printf '%s' "$vpn_json" | grep -q "\"msgVpnName\"[[:space:]]*:[[:space:]]*\"$
   if [ "$(field "$vpn_json" enabled)" = "true" ]; then
     pass "message VPN '${VPN}' exists and is enabled"
   else
-    fail "message VPN '${VPN}' exists but is disabled" "./stack.sh setup"
+    fail "message VPN '${VPN}' exists but is disabled" "./scripts/setup-broker-tracing.sh"
   fi
 else
-  fail "message VPN '${VPN}' not found" "./stack.sh setup   (or check SEMP credentials in .env)"
+  fail "message VPN '${VPN}' not found" "./scripts/setup-broker-tracing.sh   (or check SEMP credentials in .env)"
 fi
 
 # The single most common failure in this stack. A broker binds AMQP to exactly
@@ -125,7 +133,7 @@ if [ "$amqp_enabled" = "true" ] && [ "$amqp_port" = "${SOLACE_BROKER_AMQP_PORT}"
   pass "AMQP enabled on '${VPN}' at port ${amqp_port}"
 else
   fail "AMQP is not listening on '${VPN}' (enabled=${amqp_enabled:-?} port=${amqp_port:-?})" \
-       "AMQP is probably still bound to the 'default' VPN. ./stack.sh setup"
+       "AMQP is probably still bound to the 'default' VPN. ./scripts/setup-broker-tracing.sh"
 fi
 
 # -----------------------------------------------------------------------------
@@ -136,12 +144,12 @@ if printf '%s' "$tp_json" | grep -q "\"telemetryProfileName\""; then
   pass "telemetry profile '${PROFILE}' exists"
   [ "$(field "$tp_json" receiverEnabled)" = "true" ] \
     && pass "receiver enabled (collector may bind)" \
-    || fail "receiver is disabled" "./stack.sh setup"
+    || fail "receiver is disabled" "./scripts/setup-broker-tracing.sh"
   [ "$(field "$tp_json" traceEnabled)" = "true" ] \
     && pass "trace enabled (broker is generating spans)" \
-    || fail "trace is disabled — no spans are being produced" "./stack.sh setup"
+    || fail "trace is disabled — no spans are being produced" "./scripts/setup-broker-tracing.sh"
 else
-  fail "telemetry profile '${PROFILE}' not found" "./stack.sh setup"
+  fail "telemetry profile '${PROFILE}' not found" "./scripts/setup-broker-tracing.sh"
 fi
 
 filters_json=$(semp_get "/msgVpns/${VPN}/telemetryProfiles/${PROFILE}/traceFilters")
@@ -149,10 +157,10 @@ if printf '%s' "$filters_json" | grep -q '"traceFilterName"'; then
   if printf '%s' "$filters_json" | grep -q '"enabled"[[:space:]]*:[[:space:]]*true'; then
     pass "trace filter present and enabled"
   else
-    fail "trace filter exists but is disabled" "the filter itself needs enabling: ./stack.sh setup"
+    fail "trace filter exists but is disabled" "the filter itself needs enabling: ./scripts/setup-broker-tracing.sh"
   fi
 else
-  fail "no trace filter configured — nothing matches, so no spans" "./stack.sh setup"
+  fail "no trace filter configured — nothing matches, so no spans" "./scripts/setup-broker-tracing.sh"
 fi
 
 q_json=$(semp_mon_get "/msgVpns/${VPN}/queues/$(printf '%s' "$TELEMETRY_QUEUE" | sed 's/#/%23/g')")
@@ -176,10 +184,10 @@ if printf '%s' "$q_json" | grep -q '"queueName"'; then
     pass "queue is fully drained — the collector is keeping up"
   else
     fail "spans are backing up in the queue (${usage} MB spooled)" \
-         "the broker is producing but the collector is not consuming — ./stack.sh logs otel-collector"
+         "the broker is producing but the collector is not consuming — docker compose logs otel-collector"
   fi
 else
-  fail "telemetry queue '${TELEMETRY_QUEUE}' missing" "the profile creates it; ./stack.sh setup"
+  fail "telemetry queue '${TELEMETRY_QUEUE}' missing" "the profile creates it; ./scripts/setup-broker-tracing.sh"
 fi
 
 cu_json=$(semp_get "/msgVpns/${VPN}/clientUsernames/${SOLACE_TRACE_USER}")
@@ -189,10 +197,10 @@ if printf '%s' "$cu_json" | grep -q '"clientUsername"'; then
     pass "'${SOLACE_TRACE_USER}' bound to ACL profile '${acl}'"
   else
     fail "'${SOLACE_TRACE_USER}' has ACL profile '${acl}', expected '${TELEMETRY_QUEUE}'" \
-         "the ACL profile name must match the telemetry queue name: ./stack.sh setup"
+         "the ACL profile name must match the telemetry queue name: ./scripts/setup-broker-tracing.sh"
   fi
 else
-  fail "client username '${SOLACE_TRACE_USER}' not found" "./stack.sh setup"
+  fail "client username '${SOLACE_TRACE_USER}' not found" "./scripts/setup-broker-tracing.sh"
 fi
 
 # -----------------------------------------------------------------------------
@@ -218,17 +226,17 @@ else
   col_logs=$(docker logs dtobs-otelcol 2>&1 | grep -iv "memorylimiter\|grpc_log" | tail -200)
   if printf '%s' "$col_logs" | grep -qi "unauthorized\|authentication failed\|SASL"; then
     fail "the broker is rejecting the collector's credentials" \
-         "check SOLACE_TRACE_USER / SOLACE_TRACE_PASSWORD in .env, then ./stack.sh setup"
+         "check SOLACE_TRACE_USER / SOLACE_TRACE_PASSWORD in .env, then ./scripts/setup-broker-tracing.sh"
   else
     fail "nothing is consuming the telemetry queue" \
-         "the collector stays Running through auth and ACL failures — ./stack.sh logs otel-collector"
+         "the collector stays Running through auth and ACL failures — docker compose logs otel-collector"
   fi
 fi
 
 if curl -sf -m 10 "http://localhost:${PORT_OTEL_HEALTH}/" >/dev/null 2>&1; then
   pass "collector health endpoint responding"
 else
-  fail "collector health endpoint not responding" "./stack.sh logs otel-collector"
+  fail "collector health endpoint not responding" "docker compose logs otel-collector"
 fi
 
 # -----------------------------------------------------------------------------
@@ -248,7 +256,7 @@ done
 if [ "$tempo_ready" = true ]; then
   pass "Tempo ready"
 else
-  fail "Tempo not ready after 50s" "check ./stack.sh logs tempo"
+  fail "Tempo not ready after 50s" "check docker compose logs tempo"
 fi
 
 # An explicit time range is required. /api/search with no start/end covers only
@@ -270,10 +278,10 @@ elif [ "${TRAFFIC_SEEN:-false}" = "true" ]; then
   # The broker definitely produced spans, so an empty Tempo is a real fault
   # somewhere between the collector and storage.
   fail "the broker produced spans but Tempo has none" \
-       "the collector is not exporting — ./stack.sh logs otel-collector"
+       "the collector is not exporting — docker compose logs otel-collector"
 else
   pending "Tempo holds no traces yet" \
-          "expected until traffic is sent — ./stack.sh urls shows an sdkperf line"
+          "expected until traffic is sent — see README Sending traffic for an sdkperf command"
 fi
 
 # -----------------------------------------------------------------------------
@@ -296,10 +304,10 @@ if printf '%s' "$ds" | grep -q '"type"[[:space:]]*:[[:space:]]*"tempo"'; then
   fi
 elif printf '%s' "$ds" | grep -qi "invalid.*credential\|unauthorized"; then
   fail "Grafana rejected the credentials" \
-       "with a persistent volume the password is fixed at first boot; ./stack.sh reset to change it"
+       "with a persistent volume the password is fixed at first boot; remove the grafana-data volume to change it"
 else
   fail "Tempo datasource missing from Grafana" \
-       "check ./stack.sh logs grafana for provisioning errors"
+       "check docker compose logs grafana for provisioning errors"
 fi
 
 # -----------------------------------------------------------------------------
@@ -308,8 +316,8 @@ section "7. Persistence"
   before=$(curl -s -m 10 -u "${GF_ADMIN_USER}:${GF_ADMIN_PASSWORD}" \
             "http://localhost:${PORT_GRAFANA}/api/datasources" 2>/dev/null | grep -o '"uid":"[^"]*"' | head -1)
   printf '  %srestarting the stack...%s\n' "$DIM" "$RST"
-  ./stack.sh down >/dev/null 2>&1
-  ./stack.sh up   >/dev/null 2>&1
+  docker compose down    >/dev/null 2>&1
+  docker compose up -d   >/dev/null 2>&1
   n=0
   while [ $n -lt 30 ]; do
     curl -sf -m 5 "http://localhost:${PORT_GRAFANA}/api/health" >/dev/null 2>&1 && break
@@ -346,7 +354,7 @@ fi
 if [ "$PENDING" -gt 0 ]; then
   printf '%sThe stack is correctly configured and nothing is broken.%s\n' "$GRN" "$RST"
   printf 'It just has not seen a message yet. Publish something on VPN '"'"'%s'"'"',\n' "${VPN}"
-  printf 'then re-run this. %s./stack.sh urls%s prints a ready-made sdkperf command.\n' "$DIM" "$RST"
+  printf 'then re-run this. See README Sending traffic for a ready-made sdkperf command.\n'
   exit 0
 fi
 
