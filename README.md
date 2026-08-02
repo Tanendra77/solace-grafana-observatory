@@ -1,11 +1,19 @@
-# Solace Broker Metrics — local stack
+# Solace PubSub+ Metrics Observability
+
+[![Docker Compose](https://img.shields.io/badge/Docker%20Compose-2496ED?logo=docker&logoColor=white)](docker-compose.yaml)
+[![Solace PubSub+](https://img.shields.io/badge/Solace-PubSub%2B-00C895?logo=solace&logoColor=white)](https://solace.com/products/event-broker/)
+[![Prometheus](https://img.shields.io/badge/Prometheus-E6522C?logo=prometheus&logoColor=white)](https://prometheus.io/)
+[![Grafana](https://img.shields.io/badge/Grafana-F46800?logo=grafana&logoColor=white)](https://grafana.com/)
+[![TLS](https://img.shields.io/badge/TLS-every%20hop-success)](#security)
 
 Prometheus metrics for a Solace PubSub+ broker, collected via the community
-`solace-prometheus-exporter`, stored 7 days in Prometheus, and visualized in
-Grafana. Everything runs in Docker on one machine, every hop over TLS.
+[`solace-prometheus-exporter`](https://github.com/solacecommunity/solace-prometheus-exporter),
+stored 7 days in Prometheus, and visualized in three purpose-built Grafana
+dashboards — broker/VPN health, a 1000+-queue scale table view, and a
+landing page tying them together. Every hop, broker to browser, is TLS.
 
 This is the metrics pillar of the same effort as `grafana-dt` (distributed
-tracing) — reproducing the OpenShift build documented in
+tracing) on this repo — reproducing the OpenShift build documented in
 `doc/solace-observability-readme.md`, without OpenShift, using the community
 exporter in place of the certified operator's bundled one. Same broker
 metrics, same endpoint paths (`/solace-std`, `/solace-vpn-stats`,
@@ -15,17 +23,63 @@ The broker is not part of this stack — it's started separately
 (`docker-compose.broker.yaml`) or is one you already have. Every observability
 pillar points at the same broker instead of bundling its own copy of it.
 
+```mermaid
+flowchart LR
+
+    classDef client fill:#F9FAFB,stroke:#4B5563,stroke-width:2px,color:#111827;
+    classDef broker fill:#FFF5E6,stroke:#D97706,stroke-width:2px,color:#111827;
+    classDef monitor fill:#ECFDF5,stroke:#059669,stroke-width:2px,color:#111827;
+    classDef storage fill:#EFF6FF,stroke:#2563EB,stroke-width:2px,color:#111827;
+    classDef ui fill:#F5F3FF,stroke:#7C3AED,stroke-width:2px,color:#111827;
+
+    A["Client Applications<br/><br/>sdkperf • JMS • JCSMP • MQTT • REST"]
+
+    subgraph Broker["Messaging Platform"]
+        B["Solace PubSub+ Broker"]
+        C["SEMP API (TLS)<br/>:8080 / :1943"]
+    end
+
+    subgraph Observability["Observability Stack"]
+        D["Prometheus Exporter<br/>:9628, HTTPS"]
+        E["Prometheus<br/>7d / 2GB retention · :9090, HTTPS"]
+        F["Grafana<br/>:3000, HTTPS"]
+    end
+
+    A -->|"SMF"| B
+    B -.->|"Management"| C
+    C -->|"HTTPS + read-only monitor user"| D
+    D -->|"/solace-std /solace-vpn-stats /solace-det"| E
+    E -->|"Queries"| F
+
+    class A client
+    class B broker
+    class C,D monitor
+    class E storage
+    class F ui
+    style Broker fill:#FFFBEB,stroke:#D97706,color:#111827
+    style Observability fill:#FAF5FF,stroke:#7C3AED,color:#111827
 ```
-sdkperf / your clients ──SMF──> Solace broker (SEMP :8080 / :1943 TLS)
-                                     │  monitor user (read-only)
-                                     v  HTTPS
-                        solace-prometheus-exporter (:9628, HTTPS)
-                          /solace-std  /solace-vpn-stats  /solace-det
-                                     │  HTTPS
-                                Prometheus (7d / 2GB retention, :9090, HTTPS)
-                                     │  HTTPS
-                                  Grafana (:3000, HTTPS)
+
+---
+
+## Get this branch
+
+This work lives on its own branch, separate from `main` and from `grafana-dt`
+(the tracing pillar):
+
+```bash
+git clone --branch solace-metrics https://github.com/Tanendra77/solace-grafana-observatory.git
+cd solace-grafana-observatory
 ```
+
+Already have the repo cloned on another branch?
+
+```bash
+git fetch origin solace-metrics
+git checkout solace-metrics
+```
+
+Browse it on GitHub: [`Tanendra77/solace-grafana-observatory` @ `solace-metrics`](https://github.com/Tanendra77/solace-grafana-observatory/tree/solace-metrics).
 
 ---
 
@@ -225,20 +279,3 @@ scripts/
 - [Prometheus documentation](https://prometheus.io/docs/) — scrape config, retention flags, `--web.config.file` for TLS.
 - [Grafana documentation](https://grafana.com/docs/grafana/latest/) — dashboard provisioning, datasource provisioning, and the [table transformations reference](https://grafana.com/docs/grafana/latest/panels-visualizations/query-transform-data/transform-data/) (`joinByField`, `organize`, `filterByValue`, `calculateField`) the Queue Monitor dashboard is built on.
 - `doc/solace-observability-readme.md` — the OpenShift build this stack reproduces locally. Gitignored (internal reference material) — present only if you already have it locally, not part of this repo.
-
----
-
-## What is deliberately not here
-
-- **Broker bootstrap.** No VPN, queue, or application user is created for
-  you — bring your own broker configuration, or configure a fresh one by
-  hand. Only the read-only `monitor` user (needed by the exporter) is
-  created automatically, and only when using `docker-compose.broker.yaml`.
-- **Alerting rules.** Dashboards only for this pass — can follow once the
-  dashboard itself is verified working.
-- **Long-term retention beyond 7 days.** Thanos/remote-write is out of scope
-  at this size, same call the OpenShift doc made for its cluster Prometheus.
-- **Traces and logs.** Metrics only — they live on their own branches
-  (`grafana-dt` for tracing).
-- **HA.** One broker, one exporter, one Prometheus.
-- **Automated cert rotation / a real CA.** Self-signed, manually regenerated.
