@@ -1,0 +1,164 @@
+{
+  "uid": "solace-queue-monitor",
+  "title": "Solace Queue Monitor",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "browser",
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "vpn",
+        "type": "query",
+        "label": "VPN",
+        "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+        "query": { "query": "label_values(solace_vpn_enabled, vpn_name)", "refId": "vpn" },
+        "refresh": 2,
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "queue",
+        "type": "textbox",
+        "label": "Queue Search",
+        "description": "Type part of a queue name to filter the tables below. Leave empty to show all. This is a regex substring match, so . * + ( ) behave as regex, not literal text.",
+        "query": "",
+        "current": { "text": "", "value": "" }
+      }
+    ]
+  },
+  "panels": [
+    { "id": 1, "type": "row", "title": "Overview", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
+
+    { "id": 2, "type": "stat", "title": "Total Queues",
+      "gridPos": { "h": 3, "w": 4, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "count(solace_queue_spool_usage_msgs{vpn_name=~\"$vpn\",queue_name!~\"#.*\"})", "refId": "A", "instant": true }] },
+
+    { "id": 3, "type": "stat", "title": "With Active Consumers",
+      "gridPos": { "h": 3, "w": 4, "x": 4, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "count(solace_queue_binds{vpn_name=~\"$vpn\",queue_name!~\"#.*\"} > 0)", "refId": "A", "instant": true }] },
+
+    { "id": 4, "type": "stat", "title": "Idle (No Consumer)",
+      "gridPos": { "h": 3, "w": 4, "x": 8, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "description": "A growing idle queue with rising depth usually means a stuck or missing consumer.",
+      "targets": [{ "expr": "count(solace_queue_binds{vpn_name=~\"$vpn\",queue_name!~\"#.*\"} == 0)", "refId": "A", "instant": true }] },
+
+    { "id": 5, "type": "stat", "title": "Total Messages Spooled",
+      "gridPos": { "h": 3, "w": 4, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "sum(solace_queue_spool_usage_msgs{vpn_name=~\"$vpn\",queue_name!~\"#.*\"})", "refId": "A", "instant": true }] },
+
+    { "id": 12, "type": "stat", "title": "Total Spooled Size",
+      "gridPos": { "h": 3, "w": 8, "x": 16, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "sum(solace_queue_spool_usage_bytes{vpn_name=~\"$vpn\",queue_name!~\"#.*\"})", "refId": "A", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "decbytes" }, "overrides": [] } },
+
+    { "id": 6, "type": "row", "title": "All Queues", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 } },
+
+    { "id": 7, "type": "table", "title": "All Queues (click any column header to sort)",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [
+        { "expr": "solace_queue_spool_usage_msgs{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "A" },
+        { "expr": "solace_queue_spool_usage_bytes{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "B" },
+        { "expr": "solace_queue_spool_quota_bytes{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "C" },
+        { "expr": "solace_queue_binds{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "D" },
+        { "expr": "solace_queue_subscriptions{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "E" }
+      ],
+      "transformations": [
+        { "id": "joinByField", "options": { "byField": "queue_name", "mode": "outer" } },
+        { "id": "organize", "options": {
+          "excludeByName": { "Time": true, "job": true, "instance": true, "__name__": true, "Time 1": true, "Time 2": true, "Time 3": true, "Time 4": true, "Time 5": true, "job 1": true, "job 2": true, "job 3": true, "job 4": true, "job 5": true, "instance 1": true, "instance 2": true, "instance 3": true, "instance 4": true, "instance 5": true, "vpn_name 1": true, "vpn_name 2": true, "vpn_name 3": true, "vpn_name 4": true },
+          "renameByName": {
+            "queue_name": "Queue", "vpn_name": "VPN",
+            "Value #A": "Depth (msgs)", "Value #B": "Spool Used",
+            "Value #C": "Spool Quota", "Value #D": "Consumers", "Value #E": "Subscriptions"
+          }
+        } },
+        { "id": "calculateField", "options": {
+          "mode": "binary",
+          "binary": { "left": "Spool Used", "operator": "/", "right": "Spool Quota" },
+          "alias": "Spool Usage %",
+          "replaceFields": false
+        } }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [
+        { "matcher": { "id": "byName", "options": "Spool Usage %" }, "properties": [{ "id": "unit", "value": "percentunit" }] },
+        { "matcher": { "id": "byName", "options": "Spool Used" }, "properties": [{ "id": "unit", "value": "decbytes" }] },
+        { "matcher": { "id": "byName", "options": "Spool Quota" }, "properties": [{ "id": "unit", "value": "decbytes" }] }
+      ] },
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "Depth (msgs)", "desc": true }], "footer": { "enablePagination": true } } },
+
+    { "id": 8, "type": "row", "title": "Active Consumers", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 } },
+
+    { "id": 9, "type": "table", "title": "Queues with Active Consumers",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 17 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [
+        { "expr": "solace_queue_spool_usage_msgs{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "A" },
+        { "expr": "solace_queue_spool_usage_bytes{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "B" },
+        { "expr": "solace_queue_spool_quota_bytes{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "C" },
+        { "expr": "solace_queue_binds{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "D" },
+        { "expr": "solace_queue_subscriptions{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "E" }
+      ],
+      "transformations": [
+        { "id": "joinByField", "options": { "byField": "queue_name", "mode": "outer" } },
+        { "id": "organize", "options": {
+          "excludeByName": { "Time": true, "job": true, "instance": true, "__name__": true, "Time 1": true, "Time 2": true, "Time 3": true, "Time 4": true, "Time 5": true, "job 1": true, "job 2": true, "job 3": true, "job 4": true, "job 5": true, "instance 1": true, "instance 2": true, "instance 3": true, "instance 4": true, "instance 5": true, "vpn_name 1": true, "vpn_name 2": true, "vpn_name 3": true, "vpn_name 4": true },
+          "renameByName": {
+            "queue_name": "Queue", "vpn_name": "VPN",
+            "Value #A": "Depth (msgs)", "Value #B": "Spool Used",
+            "Value #C": "Spool Quota", "Value #D": "Consumers", "Value #E": "Subscriptions"
+          }
+        } },
+        { "id": "filterByValue", "options": {
+          "type": "include", "match": "all",
+          "filters": [{ "fieldName": "Consumers", "config": { "id": "greater", "options": { "value": 0 } } }]
+        } }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [
+        { "matcher": { "id": "byName", "options": "Spool Used" }, "properties": [{ "id": "unit", "value": "decbytes" }] },
+        { "matcher": { "id": "byName", "options": "Spool Quota" }, "properties": [{ "id": "unit", "value": "decbytes" }] }
+      ] },
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "Depth (msgs)", "desc": true }], "footer": { "enablePagination": true } } },
+
+    { "id": 10, "type": "row", "title": "Idle Queues", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 } },
+
+    { "id": 11, "type": "table", "title": "Idle Queues (no consumer) — check for stuck producers",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [
+        { "expr": "solace_queue_spool_usage_msgs{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "A" },
+        { "expr": "solace_queue_spool_usage_bytes{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "B" },
+        { "expr": "solace_queue_spool_quota_bytes{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "C" },
+        { "expr": "solace_queue_binds{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "D" },
+        { "expr": "solace_queue_subscriptions{vpn_name=~\"$vpn\",queue_name=~\".*$queue.*\",queue_name!~\"#.*\"}", "format": "table", "instant": true, "refId": "E" }
+      ],
+      "transformations": [
+        { "id": "joinByField", "options": { "byField": "queue_name", "mode": "outer" } },
+        { "id": "organize", "options": {
+          "excludeByName": { "Time": true, "job": true, "instance": true, "__name__": true, "Time 1": true, "Time 2": true, "Time 3": true, "Time 4": true, "Time 5": true, "job 1": true, "job 2": true, "job 3": true, "job 4": true, "job 5": true, "instance 1": true, "instance 2": true, "instance 3": true, "instance 4": true, "instance 5": true, "vpn_name 1": true, "vpn_name 2": true, "vpn_name 3": true, "vpn_name 4": true },
+          "renameByName": {
+            "queue_name": "Queue", "vpn_name": "VPN",
+            "Value #A": "Depth (msgs)", "Value #B": "Spool Used",
+            "Value #C": "Spool Quota", "Value #D": "Consumers", "Value #E": "Subscriptions"
+          }
+        } },
+        { "id": "filterByValue", "options": {
+          "type": "include", "match": "all",
+          "filters": [{ "fieldName": "Consumers", "config": { "id": "equal", "options": { "value": 0 } } }]
+        } }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [
+        { "matcher": { "id": "byName", "options": "Spool Used" }, "properties": [{ "id": "unit", "value": "decbytes" }] },
+        { "matcher": { "id": "byName", "options": "Spool Quota" }, "properties": [{ "id": "unit", "value": "decbytes" }] }
+      ] },
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "Depth (msgs)", "desc": true }], "footer": { "enablePagination": true } } }
+  ]
+}

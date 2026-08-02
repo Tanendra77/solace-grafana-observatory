@@ -1,0 +1,231 @@
+{
+  "uid": "solace-vpn-overview",
+  "title": "Solace VPN Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "browser",
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "vpn",
+        "type": "query",
+        "label": "VPN",
+        "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+        "query": { "query": "label_values(solace_vpn_enabled, vpn_name)", "refId": "vpn" },
+        "refresh": 2,
+        "includeAll": false,
+        "multi": false
+      }
+    ]
+  },
+  "panels": [
+    { "id": 1, "type": "row", "title": "Broker Health", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
+
+    { "id": 2, "type": "stat", "title": "Broker Up",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "min(solace_up{job=\"solace-std\"})", "refId": "A", "instant": true }] },
+
+    { "id": 3, "type": "stat", "title": "Redundancy Up",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "solace_system_redundancy_up", "refId": "A", "instant": true }],
+      "description": "0 is expected on a standalone (non-HA) broker." },
+
+    { "id": 4, "type": "stat", "title": "Config-Sync State",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "solace_configsync_table_syncstate", "refId": "A", "instant": true }] },
+
+    { "id": 5, "type": "gauge", "title": "Disk Latency (avg)",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "solace_system_disk_latency_avg_seconds", "refId": "A", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "s", "max": 0.05 }, "overrides": [] } },
+
+    { "id": 6, "type": "gauge", "title": "Compute Latency (avg)",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "solace_system_compute_latency_avg_seconds", "refId": "A", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "s", "max": 0.05 }, "overrides": [] } },
+
+    { "id": 7, "type": "gauge", "title": "Mate Link Latency (avg)",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "solace_system_mate_link_latency_avg_seconds", "refId": "A", "instant": true }],
+      "description": "HA mate-link latency. 0 on a standalone broker.",
+      "fieldConfig": { "defaults": { "unit": "s", "max": 0.05 }, "overrides": [] } },
+
+    { "id": 8, "type": "row", "title": "VPN Connections", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 } },
+
+    { "id": 9, "type": "timeseries", "title": "Connections by Service",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [
+        { "expr": "solace_vpn_connections_service_smf{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}", "legendFormat": "smf", "refId": "A" },
+        { "expr": "solace_vpn_connections_service_web{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}", "legendFormat": "web", "refId": "B" },
+        { "expr": "solace_vpn_connections_service_amqp{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}", "legendFormat": "amqp", "refId": "C" },
+        { "expr": "solace_vpn_connections_service_mqtt{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}", "legendFormat": "mqtt", "refId": "D" },
+        { "expr": "solace_vpn_connections_service_rest_in{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}", "legendFormat": "rest-in", "refId": "E" },
+        { "expr": "solace_vpn_connections_service_rest_out{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}", "legendFormat": "rest-out", "refId": "F" }
+      ] },
+
+    { "id": 10, "type": "stat", "title": "Total Active Connections",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "sum(solace_vpn_connections{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"})", "refId": "A", "instant": true }] },
+
+    { "id": 11, "type": "timeseries", "title": "Connection Quota Usage %",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "100 * sum(solace_vpn_connections{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}) / sum(solace_vpn_quota_connections{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"})", "legendFormat": "used", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "max": 100 }, "overrides": [] } },
+
+    { "id": 12, "type": "row", "title": "Message Traffic", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 } },
+
+    { "id": 13, "type": "timeseries", "title": "Message Rate (in / out)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [
+        { "expr": "sum(rate(solace_vpn_rx_msgs_total{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}[$__rate_interval]))", "legendFormat": "in", "refId": "A" },
+        { "expr": "sum(rate(solace_vpn_tx_msgs_total{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}[$__rate_interval]))", "legendFormat": "out", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0, "custom": { "fillOpacity": 25, "lineWidth": 2, "spanNulls": true } }, "overrides": [] } },
+
+    { "id": 14, "type": "timeseries", "title": "Byte Rate (in / out)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [
+        { "expr": "sum(rate(solace_vpn_rx_bytes_total{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}[$__rate_interval]))", "legendFormat": "in", "refId": "A" },
+        { "expr": "sum(rate(solace_vpn_tx_bytes_total{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}[$__rate_interval]))", "legendFormat": "out", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "min": 0, "custom": { "fillOpacity": 25, "lineWidth": 2, "spanNulls": true } }, "overrides": [] } },
+
+    { "id": 15, "type": "timeseries", "title": "Discarded Message Rate",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "description": "Non-zero here means backpressure or a full spool — investigate before it grows.",
+      "targets": [
+        { "expr": "sum(rate(solace_vpn_rx_discarded_msgs_total{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}[$__rate_interval]))", "legendFormat": "in", "refId": "A" },
+        { "expr": "sum(rate(solace_vpn_tx_discarded_msgs_total{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}[$__rate_interval]))", "legendFormat": "out", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] } },
+
+    { "id": 17, "type": "row", "title": "Producers & Consumers", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 } },
+
+    { "id": 18, "type": "stat", "title": "Total Queues",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "count(solace_queue_spool_usage_msgs{vpn_name=~\"$vpn\"})", "refId": "A", "instant": true }] },
+
+    { "id": 19, "type": "stat", "title": "Active Consumers (queue binds)",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "description": "One bind per consumer per queue — the count of currently-consuming clients.",
+      "targets": [{ "expr": "sum(solace_queue_binds{vpn_name=~\"$vpn\"})", "refId": "A", "instant": true }] },
+
+    { "id": 20, "type": "stat", "title": "Connected Clients (producers + consumers)",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "description": "Solace doesn't label a client's role — this is everyone connected, publishing or consuming or both.",
+      "targets": [{ "expr": "count(count by (client_name) (solace_client_rx_bytes_total{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}))", "refId": "A", "instant": true }] },
+
+    { "id": 21, "type": "stat", "title": "Avg Consumers / Queue",
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "sum(solace_queue_binds{vpn_name=~\"$vpn\"}) / count(solace_queue_spool_usage_msgs{vpn_name=~\"$vpn\"})", "refId": "A", "instant": true }] },
+
+    { "id": 31, "type": "row", "title": "Client Detail", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 } },
+
+    { "id": 32, "type": "table", "title": "Per-Client Throughput",
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [
+        { "expr": "solace_client_rx_bytes_total{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}", "format": "table", "instant": true, "refId": "A" },
+        { "expr": "solace_client_tx_bytes_total{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"}", "format": "table", "instant": true, "refId": "B" }
+      ],
+      "transformations": [
+        { "id": "joinByField", "options": { "byField": "client_name", "mode": "outer" } },
+        { "id": "organize", "options": {
+          "excludeByName": { "Time": true, "job": true, "instance": true, "__name__": true, "Time 1": true, "job 1": true, "instance 1": true, "vpn_name 1": true, "client_username 1": true },
+          "renameByName": {
+            "client_name": "Client", "client_username": "Username", "vpn_name": "VPN",
+            "Value #A": "RX", "Value #B": "TX"
+          }
+        } }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [
+        { "matcher": { "id": "byName", "options": "RX" }, "properties": [{ "id": "unit", "value": "decbytes" }] },
+        { "matcher": { "id": "byName", "options": "TX" }, "properties": [{ "id": "unit", "value": "decbytes" }] }
+      ] },
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "RX", "desc": true }], "footer": { "enablePagination": true } } },
+
+    { "id": 33, "type": "table", "title": "Slow Subscribers",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "description": "A slow subscriber can't keep up with its rate of delivery — a common root cause of queue pile-up. Empty is good.",
+      "targets": [{ "expr": "solace_client_slow_subscriber{job=\"solace-vpn-stats\",vpn_name=~\"$vpn\"} == 1", "format": "table", "instant": true, "refId": "A" }],
+      "transformations": [
+        { "id": "organize", "options": {
+          "excludeByName": { "Time": true, "job": true, "instance": true, "__name__": true, "Value": true },
+          "renameByName": { "client_name": "Client", "client_username": "Username", "vpn_name": "VPN" }
+        } }
+      ] },
+
+    { "id": 22, "type": "row", "title": "Replication & HA", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 } },
+
+    { "id": 23, "type": "stat", "title": "Redundancy Up",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 46 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "solace_system_redundancy_up", "refId": "A", "instant": true }] },
+
+    { "id": 24, "type": "stat", "title": "VPN Replication Admin State",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 46 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "description": "0=shutdown, 1=enabled, 2=n/a",
+      "targets": [{ "expr": "solace_vpn_replication_admin_state{vpn_name=~\"$vpn\"}", "refId": "A", "instant": true }] },
+
+    { "id": 25, "type": "stat", "title": "VPN Replication Config State",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 46 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "description": "0=standby, 1=active, 2=n/a",
+      "targets": [{ "expr": "solace_vpn_replication_config_state{vpn_name=~\"$vpn\"}", "refId": "A", "instant": true }] },
+
+    { "id": 26, "type": "stat", "title": "Config-Sync Ownership",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 46 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "solace_configsync_table_ownership", "refId": "A", "instant": true }] },
+
+    { "id": 27, "type": "table", "title": "Internal/System Queue Pile-up (best effort — verify against your broker)",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 46 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "description": "Solace's internal queues (replication, telemetry, DMQ) conventionally start with '#'. Not independently confirmed against a real HA-paired broker — check the Queue names here match what you expect before trusting this for replication-queue monitoring.",
+      "targets": [{ "expr": "solace_queue_spool_usage_msgs{vpn_name=~\"$vpn\",queue_name=~\"#.*\"}", "format": "table", "instant": true, "refId": "A" }],
+      "transformations": [
+        { "id": "organize", "options": {
+          "excludeByName": { "Time": true, "job": true, "instance": true, "__name__": true },
+          "renameByName": { "queue_name": "Queue", "vpn_name": "VPN", "Value": "Depth (msgs)" }
+        } }
+      ] },
+
+    { "id": 28, "type": "row", "title": "Spool", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 54 } },
+
+    { "id": 29, "type": "timeseries", "title": "System Spool Usage vs Quota",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 55 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [
+        { "expr": "solace_system_spool_usage_bytes", "legendFormat": "used", "refId": "A" },
+        { "expr": "solace_system_spool_quota_bytes", "legendFormat": "quota", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] } },
+
+    { "id": 30, "type": "timeseries", "title": "VPN Spool Usage %",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 55 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "solace_vpn_spool_usage_pct{vpn_name=~\"$vpn\"}", "legendFormat": "{{vpn_name}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "max": 100 }, "overrides": [] } }
+  ]
+}

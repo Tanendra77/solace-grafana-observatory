@@ -1,0 +1,53 @@
+{
+  "uid": "solace-home",
+  "title": "Solace Observability — Start Here",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "browser",
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    { "id": 1, "type": "text", "title": "",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "# Solace Broker Metrics\n\nTwo dashboards, split by what they're for:\n\n### [Solace VPN Overview](/d/solace-vpn-overview)\nPick a VPN, see everything about it — broker/HA health, connections, message traffic, producers & consumers, per-client throughput, slow subscribers, replication state, spool usage.\n\n### [Solace Queue Monitor](/d/solace-queue-monitor)\nBuilt for scale — hundreds or thousands of queues as sortable, searchable tables instead of unreadable graphs. All queues sorted by pile-up, filtered to active consumers, filtered to idle queues.\n\n---\n\nUsage guide: `config/grafana/provisioning/dashboards/README.md` in the repo. `./scripts/verify.sh` checks the whole pipeline if something looks wrong."
+      } },
+
+    { "id": 2, "type": "row", "title": "System Pulse (all VPNs)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 } },
+
+    { "id": 3, "type": "stat", "title": "Broker Up",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "min(solace_up{job=\"solace-std\"})", "refId": "A", "instant": true }],
+      "fieldConfig": { "defaults": { "mappings": [
+        { "type": "value", "options": { "1": { "text": "UP", "color": "green" }, "0": { "text": "DOWN", "color": "red" } } }
+      ] }, "overrides": [] } },
+
+    { "id": 4, "type": "stat", "title": "Redundancy Up",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "solace_system_redundancy_up", "refId": "A", "instant": true }] },
+
+    { "id": 5, "type": "stat", "title": "VPNs",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "count(solace_vpn_enabled == 1)", "refId": "A", "instant": true }] },
+
+    { "id": 6, "type": "stat", "title": "Total Queues",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "count(solace_queue_spool_usage_msgs{queue_name!~\"#.*\"})", "refId": "A", "instant": true }] },
+
+    { "id": 7, "type": "stat", "title": "Active Consumers",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "sum(solace_queue_binds{queue_name!~\"#.*\"})", "refId": "A", "instant": true }] },
+
+    { "id": 8, "type": "stat", "title": "Total Messages Spooled",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-solace" },
+      "targets": [{ "expr": "sum(solace_queue_spool_usage_msgs{queue_name!~\"#.*\"})", "refId": "A", "instant": true }] }
+  ]
+}
