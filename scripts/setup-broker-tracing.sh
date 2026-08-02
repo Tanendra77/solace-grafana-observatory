@@ -1,24 +1,27 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # =============================================================================
-# broker-setup.sh — configure a Solace broker for distributed tracing
+# setup-broker-tracing.sh — configure a Solace broker for distributed tracing
 #
 # Idempotent throughout: every object is created, and if it already exists it is
-# updated instead. Safe to run on every `up`, and safe to run by hand at any
-# time. Works against the broker in this stack or any reachable broker, because
-# it only ever talks SEMP v2 over HTTP.
+# updated instead. Safe to run any time, including repeatedly. Works against
+# the broker started by docker-compose.broker.yaml or any broker you already
+# have — it only ever talks SEMP v2 over HTTP, from your host.
 #
-# POSIX sh + curl only — no bash, no jq. It runs inside curlimages/curl.
-#
-# Run standalone:
-#   SOLACE_SEMP_URL=http://localhost:8080 ... sh scripts/broker-setup.sh
-# or through the stack:
-#   ./stack.sh setup
+# Run from Git Bash / WSL on Windows, or any bash elsewhere:
+#   ./scripts/setup-broker-tracing.sh
 # =============================================================================
 set -eu
 
+cd "$(dirname "$0")/.."
+[ -f .env ] || { echo "no .env found — copy .env.example to .env first"; exit 1; }
+set -a
+# shellcheck disable=SC1091
+. ./.env
+set +a
+
 # --- configuration, all from the environment ---------------------------------
 BOOTSTRAP_ENABLED="${BOOTSTRAP_ENABLED:-true}"
-SEMP_URL="${SOLACE_SEMP_URL:-http://solbroker:8080}"
+SEMP_URL="${SOLACE_SEMP_URL:-http://host.docker.internal:8080}"
 ADMIN_USER="${SOLACE_ADMIN_USER:-admin}"
 ADMIN_PASS="${SOLACE_ADMIN_PASSWORD:-admin}"
 VPN="${SOLACE_MSG_VPN:-test}"
