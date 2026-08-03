@@ -1,5 +1,5 @@
 # =============================================================================
-# OTel Collector — Solace telemetry queue -> Tempo
+# OTel Collector — Solace telemetry queue -> Elasticsearch
 #
 # Requires the contrib distribution; the `solace` receiver exists nowhere else.
 # Every value comes from the environment, set in .env.
@@ -26,7 +26,7 @@ receivers:
 
   # Published on host 4317/4318. Nothing uses it yet — it is the seam for
   # adding instrumented applications later, so their spans land in the same
-  # Tempo alongside the broker's.
+  # Elasticsearch alongside the broker's.
   otlp:
     protocols:
       grpc:
@@ -49,10 +49,13 @@ processors:
     timeout: ${env:OTEL_BATCH_TIMEOUT}
 
 exporters:
-  otlp/tempo:
-    endpoint: tempo:4317
-    tls:
-      insecure: true
+  # mode: otel writes into the OTel-native `traces-generic.otel-default` data
+  # stream with ECS/OTel semantic-convention field mapping — no static index
+  # name to keep in sync, Elasticsearch manages it.
+  elasticsearch:
+    endpoints: ["http://elasticsearch:9200"]
+    mapping:
+      mode: otel
 
   # Prints spans to `docker logs otel-collector`. Invaluable for first
   # bring-up. Turn OTEL_LOG_LEVEL down to info once the pipeline is proven —
@@ -84,4 +87,4 @@ service:
     traces:
       receivers: [solace, otlp]
       processors: [memory_limiter, batch]
-      exporters: [otlp/tempo, debug]
+      exporters: [elasticsearch, debug]

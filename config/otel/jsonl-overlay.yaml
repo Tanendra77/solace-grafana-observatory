@@ -1,5 +1,5 @@
 # =============================================================================
-# Optional overlay — adds the JSONL file sink alongside Tempo.
+# Optional overlay — adds the JSONL file sink alongside Elasticsearch.
 #
 # Applied only when TRACE_FILE_ENABLED=true, via docker-compose.jsonl.yaml.
 # The collector merges multiple --config files; maps are merged and lists are
@@ -21,4 +21,4 @@ exporters:
 service:
   pipelines:
     traces:
-      exporters: [otlp/tempo, debug, file/traces]
+      exporters: [elasticsearch, debug, file/traces]
