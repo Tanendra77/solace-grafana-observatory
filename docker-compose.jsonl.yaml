@@ -4,7 +4,7 @@
 #
 #   docker compose -f docker-compose.yaml -f docker-compose.jsonl.yaml up -d
 #
-# Spans then land in ./trace-data/traces.jsonl in addition to Tempo.
+# Spans then land in ./trace-data/traces.jsonl in addition to Elasticsearch.
 # =============================================================================
 
 services:
