@@ -204,10 +204,12 @@ YAML files read from it; don't hardcode values in them.
 
 Things worth knowing:
 
-- **`SOLACE_BROKER_HOST` / `SOLACE_SEMP_URL`** default to
-  `host.docker.internal`, which resolves both from inside containers and from
-  your terminal — right for a broker started via `docker-compose.broker.yaml`
-  on the same machine. Point them elsewhere for a remote or shared broker.
+- **`SOLACE_BROKER_HOST`** (default `host.docker.internal`) is read by the
+  `otel-collector` container — `host.docker.internal` reaches a broker on
+  this machine from inside Docker. **`SOLACE_SEMP_URL`** (default
+  `http://localhost:8080`) is read by the setup/verify scripts, which run on
+  your host — `host.docker.internal` does not reliably resolve there, so it
+  uses `localhost` instead. Point both elsewhere for a remote or shared broker.
 - **`TRACE_FILTER_SUBSCRIPTION`** defaults to `>`, meaning every topic is
   traced. Narrow it for anything resembling production — tracing everything
   is expensive at volume.

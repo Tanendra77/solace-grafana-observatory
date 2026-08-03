@@ -21,7 +21,7 @@ set +a
 
 # --- configuration, all from the environment ---------------------------------
 BOOTSTRAP_ENABLED="${BOOTSTRAP_ENABLED:-true}"
-SEMP_URL="${SOLACE_SEMP_URL:-http://host.docker.internal:8080}"
+SEMP_URL="${SOLACE_SEMP_URL:-http://localhost:8080}"
 ADMIN_USER="${SOLACE_ADMIN_USER:-admin}"
 ADMIN_PASS="${SOLACE_ADMIN_PASSWORD:-admin}"
 VPN="${SOLACE_MSG_VPN:-test}"
@@ -82,8 +82,8 @@ until curl -s -f -m 5 -u "$AUTH" -o /dev/null "$SEMP/about/api"; do
   if [ "$n" -ge 60 ]; then
     die "broker did not answer at $SEMP after 5 minutes.
        - local mode:    check 'docker logs dtobs-solbroker'
-       - external mode: check SOLACE_SEMP_URL is reachable from inside the
-                        docker network, and that the admin credentials are right"
+       - external mode: check SOLACE_SEMP_URL is reachable from this machine,
+                        and that the admin credentials are right"
   fi
   [ $((n % 6)) -eq 0 ] && say "still waiting... (${n}0s)"
   sleep 10
