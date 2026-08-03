@@ -116,6 +116,14 @@ sdkperf_java.sh -cip=localhost:55555 -cu=dtuser@test -cp=dtuser_pw \
 Traces appear at **http://localhost:3000** → Explore → Tempo → Search → Run
 query.
 
+**4. Stop everything** when you're done — data is kept, nothing needs redoing
+on the next `up`:
+
+```bash
+docker compose down
+docker compose -f docker-compose.broker.yaml down
+```
+
 Nothing needs redoing after a restart — `docker compose down` (on either or
 both files) and back `up` preserves broker config, traces and Grafana's
 state. Add `-v` to a `down` to discard a given stack's volumes and start that
@@ -194,6 +202,20 @@ admin credentials in `.env` are right. If you don't have admin, or the broker
 is already set up, set `BOOTSTRAP_ENABLED=false` and configure it yourself —
 `scripts/setup-broker-tracing.sh` is readable as a specification of exactly
 what needs to exist on the broker.
+
+### Manual setup (no script, via PubSub+ Manager)
+
+Same result as `setup-broker-tracing.sh`, done by hand at http://localhost:8080:
+
+- **Message VPNs** → Create VPN `test`, enable it, set Max Spool Usage (e.g. 1500 MB).
+- **Message VPNs → default → Services → AMQP** → disable the Plain Text service (frees port 5672).
+- **Message VPNs → test → Services → AMQP** → set port `5672`, enable the Plain Text service.
+- **Message VPNs → test → Access Control → Client Profiles → default** → enable Guaranteed Messaging (send / receive / endpoint create).
+- **Message VPNs → test → Access Control → ACL Profiles → default** → set Client Connect / Publish Topic / Subscribe Topic default actions to Allow.
+- **Message VPNs → test → Access Control → Client Usernames** → create `dtuser`, ACL profile `default`, Client profile `default`, enabled.
+- **Message VPNs → test → Telemetry** → create profile `trace`, enable Receiver and Trace.
+- Inside profile `trace` → **Trace Filters** → create filter `allmsgs`, enabled → **Subscriptions** → add `>`.
+- **Message VPNs → test → Access Control → Client Usernames** → create `trace_user`, ACL profile `#telemetry-trace`, Client profile `#telemetry-trace` (both auto-created by the telemetry profile), enabled.
 
 ---
 
