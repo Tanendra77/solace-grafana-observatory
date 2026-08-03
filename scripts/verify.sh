@@ -6,9 +6,9 @@
 # failure localises to one hop instead of leaving you to bisect the stack.
 #
 # Every component here can look healthy while doing nothing: the collector
-# stays Running through an auth failure, Grafana serves fine with no datasource,
-# Tempo answers /ready with an empty store. These checks target the difference
-# between "up" and "working".
+# stays Running through an auth failure, Kibana serves fine with an empty
+# cluster, Elasticsearch answers /_cluster/health green with zero docs. These
+# checks target the difference between "up" and "working".
 #
 # Run directly: ./scripts/verify.sh. No jq required — only curl, grep and sed.
 # =============================================================================
@@ -78,7 +78,7 @@ printf '%sVerifying Solace DT Observatory%s\n' "$BOLD" "$RST"
 # -----------------------------------------------------------------------------
 section "1. Containers"
 # -----------------------------------------------------------------------------
-for svc in otel-collector tempo grafana; do
+for svc in otel-collector elasticsearch kibana; do
   cname=$(docker ps --filter "label=com.docker.compose.service=$svc" \
                     --filter "label=com.docker.compose.project=solace-dt-observatory" \
                     --format '{{.Names}}' | head -1)
@@ -240,103 +240,86 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-section "5. Tempo"
+section "5. Elasticsearch"
 # -----------------------------------------------------------------------------
-# Tempo answers /ready with 503 while it replays its WAL and joins its internal
-# rings — up to ~90s on a cold start. Retry rather than calling a booting Tempo
-# broken.
-tempo_ready=false
+# A single-node cluster can never assign its replica shards, so "yellow" is
+# its normal healthy state — treating it as a failure would flag every
+# working stack this compose file can ever produce.
+es_ready=false
 n=0
 while [ $n -lt 10 ]; do
-  if curl -sf -m 5 "http://localhost:${PORT_TEMPO}/ready" >/dev/null 2>&1; then
-    tempo_ready=true; break
+  health=$(curl -s -m 5 "http://localhost:${PORT_ELASTICSEARCH}/_cluster/health" 2>/dev/null)
+  status=$(field "$health" status)
+  if [ "$status" = "green" ] || [ "$status" = "yellow" ]; then
+    es_ready=true; break
   fi
   n=$((n+1)); sleep 5
 done
-if [ "$tempo_ready" = true ]; then
-  pass "Tempo ready"
+if [ "$es_ready" = true ]; then
+  pass "Elasticsearch cluster healthy (status: ${status})"
 else
-  fail "Tempo not ready after 50s" "check docker compose logs tempo"
+  fail "Elasticsearch not healthy after 50s" "check docker compose logs elasticsearch"
 fi
 
-# An explicit time range is required. /api/search with no start/end covers only
-# a narrow recent window, so traces that are minutes old return an empty result
-# and look like a broken pipeline.
-#
-# The window also has to be generous. Too narrow and a stack left idle
-# overnight reports perfectly good traces as missing, which points the blame at
-# the collector instead of at the clock.
-LOOKBACK=$(( ${VERIFY_LOOKBACK_HOURS:-168} * 3600 ))
-NOW=$(date +%s); SINCE=$((NOW - LOOKBACK))
-search=$(curl -s -m 15 "http://localhost:${PORT_TEMPO}/api/search?limit=20&start=${SINCE}&end=${NOW}" 2>/dev/null)
-if printf '%s' "$search" | grep -q '"traceID"'; then
-  n=$(printf '%s' "$search" | grep -o '"traceID"' | wc -l | tr -d ' ')
-  pass "Tempo has ingested traces (${n} in the last ${VERIFY_LOOKBACK_HOURS:-168}h)"
-  root=$(field "$search" rootTraceName)
-  [ -n "$root" ] && printf '         %smost recent: %s%s\n' "$DIM" "$root" "$RST"
-elif [ "${TRAFFIC_SEEN:-false}" = "true" ]; then
-  # The broker definitely produced spans, so an empty Tempo is a real fault
-  # somewhere between the collector and storage.
-  fail "the broker produced spans but Tempo has none" \
-       "the collector is not exporting — docker compose logs otel-collector"
-else
-  pending "Tempo holds no traces yet" \
-          "expected until traffic is sent — see README Sending traffic for an sdkperf command"
-fi
-
-# -----------------------------------------------------------------------------
-section "6. Grafana"
-# -----------------------------------------------------------------------------
-ds=$(curl -s -m 10 -u "${GF_ADMIN_USER}:${GF_ADMIN_PASSWORD}" \
-      "http://localhost:${PORT_GRAFANA}/api/datasources" 2>/dev/null)
-if printf '%s' "$ds" | grep -q '"type"[[:space:]]*:[[:space:]]*"tempo"'; then
-  pass "Tempo datasource present in Grafana"
-
-  # Present is not the same as working. Ask Grafana to actually reach Tempo —
-  # this is the equivalent of clicking "Save & test" in the UI.
-  health=$(curl -s -m 15 -u "${GF_ADMIN_USER}:${GF_ADMIN_PASSWORD}" \
-            "http://localhost:${PORT_GRAFANA}/api/datasources/uid/tempo-solace/health" 2>/dev/null)
-  if printf '%s' "$health" | grep -q '"status"[[:space:]]*:[[:space:]]*"OK"'; then
-    pass "Grafana can query Tempo"
+# The traces-* data stream does not exist until the first span is indexed, so
+# "index_not_found" on a fresh stack means "no traffic yet", not "broken".
+LOOKBACK_H="${VERIFY_LOOKBACK_HOURS:-168}"
+query="{\"query\":{\"range\":{\"@timestamp\":{\"gte\":\"now-${LOOKBACK_H}h\"}}},\"size\":0,\"track_total_hits\":true}"
+search=$(curl -s -m 15 -H 'Content-Type: application/json' -d "$query" \
+          "http://localhost:${PORT_ELASTICSEARCH}/traces-*/_search" 2>/dev/null)
+if printf '%s' "$search" | grep -q 'index_not_found_exception'; then
+  if [ "${TRAFFIC_SEEN:-false}" = "true" ]; then
+    fail "the broker produced spans but no traces index exists in Elasticsearch" \
+         "the collector is not exporting — docker compose logs otel-collector"
   else
-    fail "Grafana has the datasource but cannot query Tempo" \
-         "$(printf '%s' "$health" | sed 's/.*"message":"\([^"]*\)".*/\1/')"
+    pending "no traces index in Elasticsearch yet" \
+            "expected until traffic is sent — see README Sending traffic for an sdkperf command"
   fi
-elif printf '%s' "$ds" | grep -qi "invalid.*credential\|unauthorized"; then
-  fail "Grafana rejected the credentials" \
-       "with a persistent volume the password is fixed at first boot; remove the grafana-data volume to change it"
 else
-  fail "Tempo datasource missing from Grafana" \
-       "check docker compose logs grafana for provisioning errors"
+  n=$(field "$search" value)
+  if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+    pass "Elasticsearch has ingested traces (${n} in the last ${LOOKBACK_H}h)"
+  elif [ "${TRAFFIC_SEEN:-false}" = "true" ]; then
+    fail "the broker produced spans but Elasticsearch has none in range" \
+         "the collector is not exporting, or VERIFY_LOOKBACK_HOURS is too narrow — docker compose logs otel-collector"
+  else
+    pending "Elasticsearch holds no traces yet" \
+            "expected until traffic is sent — see README Sending traffic for an sdkperf command"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+section "6. Kibana"
+# -----------------------------------------------------------------------------
+# Kibana has no separate datasource object to provision — it always talks to
+# the one Elasticsearch it's pointed at (ELASTICSEARCH_HOSTS), and its own
+# overall status already reflects whether that connection is working.
+kb=$(curl -s -m 10 "http://localhost:${PORT_KIBANA}/api/status" 2>/dev/null)
+level=$(field "$kb" level)
+if [ "$level" = "available" ]; then
+  pass "Kibana available"
+else
+  fail "Kibana not available (status: ${level:-unreachable})" "docker compose logs kibana"
 fi
 
 # -----------------------------------------------------------------------------
 if [ "$CHECK_PERSISTENCE" = "true" ]; then
 section "7. Persistence"
-  before=$(curl -s -m 10 -u "${GF_ADMIN_USER}:${GF_ADMIN_PASSWORD}" \
-            "http://localhost:${PORT_GRAFANA}/api/datasources" 2>/dev/null | grep -o '"uid":"[^"]*"' | head -1)
+  before=$(field "$(curl -s -m 10 "http://localhost:${PORT_ELASTICSEARCH}/traces-*/_count" 2>/dev/null)" count)
   printf '  %srestarting the stack...%s\n' "$DIM" "$RST"
   docker compose down    >/dev/null 2>&1
   docker compose up -d   >/dev/null 2>&1
   n=0
   while [ $n -lt 30 ]; do
-    curl -sf -m 5 "http://localhost:${PORT_GRAFANA}/api/health" >/dev/null 2>&1 && break
+    curl -sf -m 5 "http://localhost:${PORT_ELASTICSEARCH}/_cluster/health" >/dev/null 2>&1 && break
     sleep 5; n=$((n+1))
   done
-  after=$(curl -s -m 10 -u "${GF_ADMIN_USER}:${GF_ADMIN_PASSWORD}" \
-           "http://localhost:${PORT_GRAFANA}/api/datasources" 2>/dev/null | grep -o '"uid":"[^"]*"' | head -1)
-  if [ -n "$after" ] && [ "$before" = "$after" ]; then
-    pass "datasource survived a full restart with the same uid"
+  after=$(field "$(curl -s -m 10 "http://localhost:${PORT_ELASTICSEARCH}/traces-*/_count" 2>/dev/null)" count)
+  if [ -n "$after" ] && [ "${after:-0}" -ge "${before:-0}" ] 2>/dev/null; then
+    pass "trace data survived a full restart (${before:-0} -> ${after} docs)"
   else
-    fail "datasource did not survive the restart (before='$before' after='$after')" \
-         "Grafana is probably not on its named volume"
-  fi
-  NOW=$(date +%s); SINCE=$((NOW - $(( ${VERIFY_LOOKBACK_HOURS:-168} * 3600 )) ))
-  if curl -s -m 15 "http://localhost:${PORT_TEMPO}/api/search?limit=20&start=${SINCE}&end=${NOW}" \
-       2>/dev/null | grep -q '"traceID"'; then
-    pass "traces survived the restart"
-  else
-    fail "traces did not survive the restart" "check the tempo-data volume is mounted"
+    fail "trace data did not survive the restart (before='${before:-0}' after='${after:-0}')" \
+         "check the es-data volume is mounted"
   fi
 fi
 
@@ -358,5 +341,5 @@ if [ "$PENDING" -gt 0 ]; then
   exit 0
 fi
 
-printf '%sEverything checks out. Explore traces at http://localhost:%s -> Explore -> Tempo.%s\n' \
-  "$GRN" "${PORT_GRAFANA}" "$RST"
+printf '%sEverything checks out. Explore traces at http://localhost:%s -> Discover -> traces-*.%s\n' \
+  "$GRN" "${PORT_KIBANA}" "$RST"
