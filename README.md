@@ -106,11 +106,15 @@ starting `docker-compose.broker.yaml` and point `.env` at it instead — see
 docker compose up -d
 ```
 
-Elasticsearch takes longer than the other services to come up on a cold
-start — the collector waits for it (`depends_on: service_healthy`) before
-connecting.
+First run pulls the Elasticsearch and Kibana images (~2GB each) — give it a
+few minutes on a cold Docker cache. After that, Elasticsearch itself still
+takes longer than the other services to become healthy — the collector waits
+for it (`depends_on: service_healthy`) before connecting.
 
-**3. Send some traffic, then check it worked:**
+**3. Send some traffic, then check it worked.** Don't have `sdkperf` installed?
+Skip straight to `verify.sh` and use the broker's **Try Me!** web UI instead —
+see [Sending traffic](#sending-traffic) for every option, none of which need
+anything installed beyond a browser.
 
 ```bash
 sdkperf_java.sh -cip=localhost:55555 -cu=dtuser@test -cp=dtuser_pw \
@@ -287,6 +291,7 @@ table is for understanding *why*.
 | Elasticsearch exits immediately, log mentions `vm.max_map_count` | the Docker host's kernel mmap limit is too low for ES's storage engine | `sysctl -w vm.max_map_count=262144` on the host (native Linux Docker Engine only — Docker Desktop on Mac/Windows already sets this) |
 | Kibana shows "Kibana server is not ready yet" | still waiting on Elasticsearch, or Elasticsearch isn't healthy | `./scripts/verify.sh`, check `docker compose logs elasticsearch` |
 | Broker container restarting in a loop | an invalid `username_admin_globalaccesslevel` value | must be `admin`, not `global/admin` |
+| Traffic published successfully, queue's `lastSpooledMsgId` never moves, everything else checks out | the telemetry queue's spooling got stuck on a broker volume reused across sessions/branches — not fixable via SEMP, it's a broker-internal object | `docker compose -f docker-compose.broker.yaml down -v` for a clean volume, then `up -d` and `./scripts/setup-broker-tracing.sh` again |
 
 Two traps deserve emphasis, because both present as a perfectly healthy
 stack:
