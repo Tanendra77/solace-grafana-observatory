@@ -81,9 +81,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 20
-      # First boot allocates the JVM heap and initializes the data dir —
-      # slower than the other services here. Too short a start_period reads
-      # as a broken cluster.
+      # First boot allocates the JVM heap and initializes the data dir
       start_period: 90s
     restart: unless-stopped
 
