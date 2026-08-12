@@ -10,6 +10,8 @@ receivers:
   # spools to its own queue, and a receiver binds exactly one. `broker` takes
   # exactly one entry — it is a list for future HA, not fan-out. The port is
   # what selects the VPN, which is why VPN 2 needs its own.
+
+  # broker1 vpn1
   solace/vpn1:
     broker: ["${env:SOLACE_BROKER_HOST}:${env:SOLACE_BROKER_AMQP_PORT}"]
     auth:
@@ -22,7 +24,7 @@ receivers:
       insecure: true
       insecure_skip_verify: true
 
-  # Same queue name as vpn1 — queue names are scoped to their VPN.
+  # broker1 vpn 2
   solace/vpn2:
     broker: ["${env:SOLACE_BROKER_HOST}:${env:SOLACE_BROKER_AMQP_PORT_2}"]
     auth:
@@ -51,15 +53,14 @@ processors:
     spike_limit_mib: ${env:OTEL_MEMORY_SPIKE_MIB}
 
   # Both VPNs share one index, so spans need to say which VPN they came from.
-  # The receiver already knows — it puts the VPN name in service.instance.id —
-  # so copy it to a field that reads as what it is. Taking the value from the
-  # span rather than from config is what lets every VPN share one pipeline.
-  transform/vpn-tag:
-    error_mode: ignore
-    trace_statements:
-      - context: resource
-        statements:
-          - set(resource.attributes["solace.msg_vpn"], resource.attributes["service.instance.id"])
+  # The receiver already knows — it puts the VPN name in service.instance.id — so copy it to a field that reads as what it is.
+  # Taking the value from the span rather than from config is what lets every VPN share one pipeline.
+  # transform/vpn-tag:
+  #   error_mode: ignore
+  #   trace_statements:
+  #     - context: resource
+  #       statements:
+  #         - set(resource.attributes["solace.msg_vpn"], resource.attributes["service.instance.id"])
 
   # batch MUST be last. Anything that needs individual spans (filter,
   # tail_sampling) has to sit between these two.
@@ -73,7 +74,7 @@ exporters:
   # stream. Note verify.sh still searches `traces-*` and so never matches this.
   elasticsearch:
     endpoints: ["http://elasticsearch:9200"]
-    traces_index: "solace_trace"
+    #traces_index: "solace_trace"
     # logs_index: "solace_traces"
     # logs_dynamic_id:
     #   enabled: true
@@ -107,10 +108,11 @@ service:
                 port: 8888
   extensions: [health_check, zpages]
   pipelines:
-    # Every traced VPN shares this pipeline; VPN 3 is one more receiver here.
+    # Every traced VPN shares this pipeline
     traces/solace:
       receivers: [solace/vpn1, solace/vpn2]
-      processors: [memory_limiter, transform/vpn-tag, batch]
+      processors: [memory_limiter, batch]
+      #processors: [memory_limiter, transform/vpn-tag, batch]
       exporters: [elasticsearch, debug]
 
     # Separate only to stay out of transform/vpn-tag: an instrumented app's
