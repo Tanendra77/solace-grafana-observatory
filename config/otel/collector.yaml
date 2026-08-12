@@ -6,12 +6,6 @@
 # =============================================================================
 
 receivers:
-  # An ordinary AMQP client binding to the broker's telemetry queue.
-  #
-  # Solace DT is not an agent-scraping model: the broker writes spans into a
-  # real, spool-backed queue and this consumes it. That is why spans survive a
-  # collector outage — the queue fills and drains on reconnect instead of
-  # dropping data.
   solace:
     broker: ["${env:SOLACE_BROKER_HOST}:${env:SOLACE_BROKER_AMQP_PORT}"]
     auth:
@@ -24,9 +18,6 @@ receivers:
       insecure: true
       insecure_skip_verify: true
 
-  # Published on host 4317/4318. Nothing uses it yet — it is the seam for
-  # adding instrumented applications later, so their spans land in the same
-  # Elasticsearch alongside the broker's.
   otlp:
     protocols:
       grpc:
@@ -42,6 +33,17 @@ processors:
     limit_mib: ${env:OTEL_MEMORY_LIMIT_MIB}
     spike_limit_mib: ${env:OTEL_MEMORY_SPIKE_MIB}
 
+  # Computes a stable document _id from the record's own identity, so a
+  # redelivered span event overwrites instead of duplicating. Only has any
+  # effect because logs_dynamic_id is enabled on the elasticsearch exporter:
+
+  # transform/es-doc-id:
+  #   error_mode: ignore
+  #   trace_statements:
+  #     - context: spanevent
+  #       statements:
+  #         - set(spanevent.attributes["elasticsearch.document_id"], Concat([span.trace_id.string, span.span_id.string, spanevent.name], "-"))
+
   # batch MUST be last. Anything that needs individual spans (filter,
   # tail_sampling) has to sit between these two.
   batch:
@@ -54,12 +56,16 @@ exporters:
   # name to keep in sync, Elasticsearch manages it.
   elasticsearch:
     endpoints: ["http://elasticsearch:9200"]
+    traces_index: "solace_trace"
+    # logs_index: "solace_traces"
+    # logs_dynamic_id:
+    #   enabled: true
+    # traces_dynamic_id:
+      # enabled: true
     mapping:
       mode: otel
 
-  # Prints spans to `docker logs otel-collector`. Invaluable for first
-  # bring-up. Turn OTEL_LOG_LEVEL down to info once the pipeline is proven —
-  # this is noisy and costly at volume.
+
   debug:
     verbosity: ${env:OTEL_DEBUG_VERBOSITY}
     sampling_initial: 5
@@ -86,5 +92,6 @@ service:
   pipelines:
     traces:
       receivers: [solace, otlp]
+      # processors: [memory_limiter, transform/es-doc-id, batch]
       processors: [memory_limiter, batch]
       exporters: [elasticsearch, debug]
