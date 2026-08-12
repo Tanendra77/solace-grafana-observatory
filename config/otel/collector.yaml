@@ -6,8 +6,31 @@
 # =============================================================================
 
 receivers:
-  solace:
+  # One receiver per Message VPN — this cannot be collapsed. A telemetry
+  # profile is per-VPN, so each VPN spools its spans to its own
+  # '#telemetry-<profile>' queue, and a receiver binds exactly one queue.
+  # The `broker` list takes exactly one entry; it is a list for future HA,
+  # not for fan-out across brokers or VPNs.
+  #
+  # The port is what selects the VPN. A broker binds AMQP to exactly one
+  # Message VPN per listen port, so VPN 2 needs its own port — see the AMQP
+  # section of scripts/setup-broker-tracing.sh.
+  solace/vpn1:
     broker: ["${env:SOLACE_BROKER_HOST}:${env:SOLACE_BROKER_AMQP_PORT}"]
+    auth:
+      sasl_plain:
+        username: ${env:SOLACE_TRACE_USER}
+        password: ${env:SOLACE_TRACE_PASSWORD}
+    queue: ${env:SOLACE_TELEMETRY_QUEUE}
+    max_unacknowledged: ${env:SOLACE_MAX_UNACKNOWLEDGED}
+    tls:
+      insecure: true
+      insecure_skip_verify: true
+
+  # Same queue name as vpn1 — queue names are scoped to their VPN, so both
+  # being '#telemetry-trace' is correct, not a copy-paste slip.
+  solace/vpn2:
+    broker: ["${env:SOLACE_BROKER_HOST}:${env:SOLACE_BROKER_AMQP_PORT_2}"]
     auth:
       sasl_plain:
         username: ${env:SOLACE_TRACE_USER}
@@ -44,6 +67,30 @@ processors:
   #       statements:
   #         - set(spanevent.attributes["elasticsearch.document_id"], Concat([span.trace_id.string, span.span_id.string, spanevent.name], "-"))
 
+  # Stamps which VPN a span came from, since both write to the same index.
+  # This is the only reason there is a traces pipeline per VPN: `resource`
+  # applies to a whole pipeline, so tagging each stream differently means one
+  # pipeline each.
+  #
+  # Strictly, this duplicates data already present: the solace receiver puts
+  # the VPN name in `service.instance.id`. That is kept as the thing to filter
+  # on anyway, because a field named `service.instance.id` holding a Message
+  # VPN is undocumented receiver behaviour that can change between versions,
+  # and it reads as nonsense on a dashboard. Drop both processors and merge the
+  # two pipelines back into one if you'd rather filter on the receiver's field
+  # and carry less config.
+  resource/vpn1:
+    attributes:
+      - key: solace.msg_vpn
+        value: "${env:SOLACE_MSG_VPN}"
+        action: upsert
+
+  resource/vpn2:
+    attributes:
+      - key: solace.msg_vpn
+        value: "${env:SOLACE_MSG_VPN_2}"
+        action: upsert
+
   # batch MUST be last. Anything that needs individual spans (filter,
   # tail_sampling) has to sit between these two.
   batch:
@@ -51,9 +98,13 @@ processors:
     timeout: ${env:OTEL_BATCH_TIMEOUT}
 
 exporters:
-  # mode: otel writes into the OTel-native `traces-generic.otel-default` data
-  # stream with ECS/OTel semantic-convention field mapping — no static index
-  # name to keep in sync, Elasticsearch manages it.
+  # mode: otel gives ECS/OTel semantic-convention field mapping. traces_index
+  # overrides where that lands: one static `solace_trace` index rather than the
+  # default `traces-generic.otel-default` data stream. Both VPNs write here,
+  # told apart by the solace.msg_vpn resource attribute.
+  #
+  # Note scripts/verify.sh still searches `traces-*`, which does not match this
+  # index — its Elasticsearch check reports "no traces yet" regardless.
   elasticsearch:
     endpoints: ["http://elasticsearch:9200"]
     traces_index: "solace_trace"
@@ -90,8 +141,25 @@ service:
                 port: 8888
   extensions: [health_check, zpages]
   pipelines:
-    traces:
-      receivers: [solace, otlp]
-      # processors: [memory_limiter, transform/es-doc-id, batch]
+    # memory_limiter and batch are shared instances across all three pipelines —
+    # one global memory budget and one batcher feeding Elasticsearch. That is
+    # deliberate; giving each its own would split the memory limit into budgets
+    # none of which reflects the process.
+    traces/vpn1:
+      receivers: [solace/vpn1]
+      # processors: [memory_limiter, transform/es-doc-id, resource/vpn1, batch]
+      processors: [memory_limiter, resource/vpn1, batch]
+      exporters: [elasticsearch, debug]
+
+    traces/vpn2:
+      receivers: [solace/vpn2]
+      processors: [memory_limiter, resource/vpn2, batch]
+      exporters: [elasticsearch, debug]
+
+    # OTLP gets its own pipeline purely to stay out of the resource processors.
+    # Spans from an instrumented app did not come from a Message VPN, so
+    # stamping one of the VPN names on them would be a lie in the data.
+    traces/otlp:
+      receivers: [otlp]
       processors: [memory_limiter, batch]
       exporters: [elasticsearch, debug]

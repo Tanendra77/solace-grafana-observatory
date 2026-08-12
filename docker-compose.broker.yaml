@@ -26,7 +26,8 @@ services:
     ports:
       - "${PORT_BROKER_SEMP}:8080"      # web UI + SEMP API
       - "${PORT_BROKER_SMF}:55555"      # SMF — sdkperf connects here
-      - "${PORT_BROKER_AMQP}:5672"      # AMQP — the collector's path to the queue
+      - "${PORT_BROKER_AMQP}:5672"      # AMQP — the collector's path to VPN 1's queue
+      - "${PORT_BROKER_AMQP_VPN2}:5673" # AMQP — same, for VPN 2 (one port per VPN)
       - "${PORT_BROKER_HEALTH}:5550"    # health check
       - "${PORT_BROKER_SSH}:2222"       # broker CLI over SSH
       - "${PORT_BROKER_WEB}:8008"       # web messaging

@@ -5,6 +5,7 @@
 .env
 .env.*
 !.env.example
+!.env.vpn2.example
 
 # Certificates and keys, for when TLS gets added to any pillar.
 *.pem

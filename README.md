@@ -29,24 +29,27 @@ flowchart LR
 
     subgraph Broker["Messaging Platform"]
         B["Solace PubSub+ Broker"]
-        C["Telemetry Queue<br/>#telemetry-trace · AMQP :5672"]
+        C["VPN 'test'<br/>#telemetry-trace · AMQP :5672"]
+        C2["VPN 'test2'<br/>#telemetry-trace · AMQP :5673"]
     end
 
     subgraph Observability["Observability Stack"]
-        D["OTel Collector<br/>OTLP :4317 / :4318 in"]
-        E["Elasticsearch<br/>traces-* data stream · :9200"]
+        D["OTel Collector<br/>solace/vpn1 · solace/vpn2<br/>OTLP :4317 / :4318 in"]
+        E["Elasticsearch<br/>solace_trace · :9200"]
         F["Kibana<br/>:5601"]
     end
 
     A -->|"SMF"| B
     B -.->|"spans on matching topics"| C
+    B -.->|"spans on matching topics"| C2
     C -->|"AMQP + trace_user"| D
-    D -->|"Bulk API"| E
+    C2 -->|"AMQP + trace_user"| D
+    D -->|"Bulk API, tagged solace.msg_vpn"| E
     E -->|"Discover / APM"| F
 
     class A client
     class B broker
-    class C,D monitor
+    class C,C2,D monitor
     class E storage
     class F ui
     style Broker fill:#FFFBEB,stroke:#D97706,color:#111827
@@ -96,6 +99,16 @@ both client users — idempotent, safe to re-run):
 ./scripts/setup-broker-tracing.sh
 ```
 
+The stack traces two Message VPNs. Run the same script again for the second
+one, selecting the override file rather than exporting variables — see
+[Tracing more than one Message VPN](#tracing-more-than-one-message-vpn) for
+why that distinction matters:
+
+```bash
+cp .env.vpn2.example .env.vpn2
+ENV_FILE=.env.vpn2 ./scripts/setup-broker-tracing.sh
+```
+
 Already have a broker (your own, or one shared with another pillar)? Skip
 starting `docker-compose.broker.yaml` and point `.env` at it instead — see
 [Using your own broker](#using-your-own-broker).
@@ -120,13 +133,19 @@ anything installed beyond a browser.
 sdkperf_java.sh -cip=localhost:55555 -cu=dtuser@test -cp=dtuser_pw \
                 -ptl=test/trade/new -mn=100 -mr=10
 
+sdkperf_java.sh -cip=localhost:55555 -cu=dtuser@test2 -cp=dtuser_pw \
+                -ptl=test2/trade/new -mn=100 -mr=10
+
 ./scripts/verify.sh
+ENV_FILE=.env.vpn2 ./scripts/verify.sh
 ```
 
-Traces appear at **http://localhost:5601** → **Discover**, on a data view
-over `traces-*` (create one the first time: Discover will offer to build it
-for you, or do it under Stack Management → Data Views). The **Observability
-→ APM** view gives service maps and span waterfalls over the same data.
+Traces appear at **http://localhost:5601** → **Discover**, on a data view over
+`solace_trace` (create one the first time: Discover will offer to build it for
+you, or do it under Stack Management → Data Views). Both VPNs write there;
+split them with a filter on `resource.attributes.solace.msg_vpn`. The
+**Observability → APM** view gives service maps and span waterfalls over the
+same data.
 
 **4. Stop everything** when you're done — data is kept, nothing needs redoing
 on the next `up`:
@@ -155,7 +174,9 @@ does this automatically.
 | `docker compose logs -f [service]` | Follow logs. |
 | `docker compose ps` | Show container status. |
 | `./scripts/setup-broker-tracing.sh` | (Re-)apply broker tracing config over SEMP. Idempotent. |
+| `ENV_FILE=.env.vpn2 ./scripts/setup-broker-tracing.sh` | Same, for the second traced VPN. |
 | `./scripts/verify.sh` | Check every hop; prints the fix for whatever failed. |
+| `ENV_FILE=.env.vpn2 ./scripts/verify.sh` | Same, for the second traced VPN. |
 | `./scripts/verify.sh --persistence` | Also restart and confirm state survives. |
 
 Run these from Git Bash or WSL on Windows. The two compose files are
@@ -184,7 +205,111 @@ sdkperf_java.sh -cip=localhost:55555 -cu=dtuser@test -cp=dtuser_pw \
 **Your own application** — connect to `localhost:55555`, VPN `test`, user
 `dtuser`.
 
-Exact credentials come from `.env`.
+Exact credentials come from `.env`. Swap `test` for `test2` to publish on the
+second traced VPN — SMF (`:55555`) is one port for all VPNs, unlike AMQP.
+
+---
+
+## Tracing more than one Message VPN
+
+One collector consumes both VPNs. The obvious config for this —
+
+```yaml
+solace:
+  broker: ["broker:5672", "broker:5673"]    # does NOT work
+```
+
+— is not available. The `broker` list takes exactly one entry; it is a list for
+future HA, not for fan-out. Three constraints force the actual shape:
+
+1. **A telemetry profile is per-Message-VPN.** Each VPN spools its spans to its
+   own `#telemetry-<profile>` queue. VPN 2's spans can never appear in VPN 1's
+   queue, so there is no single queue to consume.
+2. **One receiver binds one queue** — `queue:` is a scalar.
+3. **AMQP binds to exactly one Message VPN per listen port.** The port *is* the
+   VPN selector, which is why VPN 2 needs its own (`5673`) and why no
+   `user@vpn` username convention is involved.
+
+So: one `solace` receiver per VPN, in one collector.
+
+```yaml
+receivers:
+  solace/vpn1:
+    broker: ["${env:SOLACE_BROKER_HOST}:${env:SOLACE_BROKER_AMQP_PORT}"]
+    queue: ${env:SOLACE_TELEMETRY_QUEUE}
+  solace/vpn2:
+    broker: ["${env:SOLACE_BROKER_HOST}:${env:SOLACE_BROKER_AMQP_PORT_2}"]
+    queue: ${env:SOLACE_TELEMETRY_QUEUE}    # same name, different VPN — correct
+```
+
+Both write to the same `solace_trace` index, tagged by VPN so they can be told
+apart in Kibana:
+
+```yaml
+processors:
+  resource/vpn1:
+    attributes:
+      - { key: solace.msg_vpn, value: "${env:SOLACE_MSG_VPN}", action: upsert }
+```
+
+This tag duplicates data the receiver already provides — it also puts the VPN
+name in `service.instance.id`. The explicit tag is kept anyway: a field called
+`service.instance.id` holding a Message VPN is undocumented receiver behaviour
+that can change between versions, and it reads as nonsense on a dashboard. Drop
+both processors and merge the pipelines back into one if you'd rather filter on
+the receiver's field and carry less config.
+
+The traces pipeline is split per VPN (`traces/vpn1`, `traces/vpn2`) for one
+reason only: `resource` applies to a whole pipeline, so tagging each stream
+differently means one pipeline each. OTLP gets a third, `traces/otlp`, with no
+`resource` processor — spans from an instrumented app didn't come from a
+Message VPN, and stamping one on them would be a lie in the data.
+`memory_limiter` and `batch` stay shared instances across all three — one
+memory budget for the process, one batcher feeding Elasticsearch.
+
+**Adding a third VPN:** another `solace/vpn3` receiver on its own port, another
+`resource/vpn3`, another pipeline, another `.env.vpn3` — plus the port published
+in `docker-compose.broker.yaml` and passed through in `docker-compose.yaml`.
+Every pipeline must also be named in `config/otel/jsonl-overlay.yaml`; naming a
+pipeline there that doesn't exist in `collector.yaml` declares a *new* one with
+no receivers, and the collector refuses to start with
+`service::pipelines::traces: must have at least one receiver`.
+
+### Why `ENV_FILE=` and not an exported variable
+
+`setup-broker-tracing.sh` and `verify.sh` both source their env file with
+`set -a`, which **overwrites anything exported on the command line**. So this
+does not do what it looks like:
+
+```bash
+SOLACE_MSG_VPN=test2 ./scripts/setup-broker-tracing.sh    # silently reconfigures test
+```
+
+Selecting the file is the override that works. `.env.vpn2` sources `.env` and
+changes only the two values that differ, so there is nothing to keep in sync:
+
+```bash
+. ./.env
+SOLACE_MSG_VPN="${SOLACE_MSG_VPN_2}"
+SOLACE_BROKER_AMQP_PORT="${SOLACE_BROKER_AMQP_PORT_2}"
+```
+
+Everything else is deliberately identical between the two runs — profile name,
+trace user, ACL wiring, spool sizes. Those objects are scoped to their own VPN,
+so reusing the names across VPNs is correct, not a collision.
+
+### One collector or two?
+
+One, until a reason appears. A single collector means one container, one
+config, one set of ports, and shared batching to Elasticsearch; per-VPN
+visibility survives anyway, because `otelcol_receiver_accepted_spans` on
+`:8888` is labelled by receiver name.
+
+The cost is a shared blast radius: `memory_limiter` is a single global budget,
+so a burst on one VPN sheds the other's spans too, and a restart takes both
+down. Split into two collectors when one VPN's volume actually starts starving
+the other, or when the two need independent upgrades — that costs a second set
+of every port (`13133`, `8888`, `55679`, `4317`/`4318`).
 
 ---
 
@@ -229,6 +354,11 @@ Same result as `setup-broker-tracing.sh`, done by hand at http://localhost:8080:
 - Inside profile `trace` → **Trace Filters** → create filter `allmsgs`, enabled → **Subscriptions** → add `>`.
 - **Message VPNs → test → Access Control → Client Usernames** → create `trace_user`, ACL profile `#telemetry-trace`, Client profile `#telemetry-trace` (both auto-created by the telemetry profile), enabled.
 
+For the second traced VPN, repeat every step above for VPN `test2`, with one
+change: its AMQP Plain Text port is `5673`, not `5672`. AMQP listen ports must
+be unique broker-wide. Nothing else differs — the profile, filter and usernames
+are scoped to their VPN, so they keep the same names.
+
 ---
 
 ## Configuration
@@ -271,7 +401,10 @@ Things worth knowing:
 
 The collector's OTLP ports are published on the host (`4317` gRPC, `4318`
 HTTP). Point an instrumented app at either and its spans land in the same
-Elasticsearch alongside the broker's, in the same `traces-*` data stream.
+Elasticsearch alongside the broker's, in the same `solace_trace` index. OTLP
+has its own `traces/otlp` pipeline with no `resource` processor: those spans
+did not come from a Message VPN, so they carry no `solace.msg_vpn` tag rather
+than a misleading one.
 
 ---
 
@@ -291,6 +424,12 @@ table is for understanding *why*.
 | Elasticsearch exits immediately, log mentions `vm.max_map_count` | the Docker host's kernel mmap limit is too low for ES's storage engine | `sysctl -w vm.max_map_count=262144` on the host (native Linux Docker Engine only — Docker Desktop on Mac/Windows already sets this) |
 | Kibana shows "Kibana server is not ready yet" | still waiting on Elasticsearch, or Elasticsearch isn't healthy | `./scripts/verify.sh`, check `docker compose logs elasticsearch` |
 | Broker container restarting in a loop | an invalid `username_admin_globalaccesslevel` value | must be `admin`, not `global/admin` |
+| Collector exits at startup: `service::pipelines::traces: must have at least one receiver` | `jsonl-overlay.yaml` names a pipeline that no longer exists in `collector.yaml`, which declares an empty new one instead of extending an existing one | make the pipeline names in both files match |
+| One VPN's spans arrive, the other's never do | that VPN's AMQP port isn't listening, or the bootstrap only ran for the first VPN | `ENV_FILE=.env.vpn2 ./scripts/verify.sh` — its AMQP check names the port it expected |
+| Bootstrap reconfigured the wrong VPN | `SOLACE_MSG_VPN=x ./scripts/...` — the script's `set -a` sourcing overwrites exported variables | use `ENV_FILE=.env.vpn2` instead; exporting the variable cannot work |
+| Both VPNs' spans land in Elasticsearch but can't be told apart | `SOLACE_MSG_VPN`/`SOLACE_MSG_VPN_2` not reaching the collector container | they must be listed in `docker-compose.yaml`'s `environment:`; check `resource.attributes.solace.msg_vpn` exists on a document |
+| Aggregating on `solace.msg_vpn` fails with `Fielddata is disabled` | the index was created by dynamic mapping, so the field is `text` with a `.keyword` subfield rather than a plain keyword | aggregate on `resource.attributes.solace.msg_vpn.keyword`; Kibana filters work on either |
+| Publishing over AMQP is rejected with `Queue Not Found` | Solace AMQP reads a bare address as a **queue** name | prefix the topic: `topic://test/trade/new` |
 | Traffic published successfully, queue's `lastSpooledMsgId` never moves, everything else checks out | the telemetry queue's spooling got stuck on a broker volume reused across sessions/branches — not fixable via SEMP, it's a broker-internal object | `docker compose -f docker-compose.broker.yaml down -v` for a clean volume, then `up -d` and `./scripts/setup-broker-tracing.sh` again |
 
 Two traps deserve emphasis, because both present as a perfectly healthy
@@ -300,7 +439,9 @@ stack:
 If it stays there while your traffic and telemetry profile are on `test`,
 the collector connects successfully, binds nothing, and reports itself
 healthy indefinitely. `scripts/setup-broker-tracing.sh` moves it; don't undo
-that by hand.
+that by hand. This is also why each traced VPN needs its own AMQP port, unique
+broker-wide — see [Tracing more than one Message
+VPN](#tracing-more-than-one-message-vpn).
 
 **The telemetry queue is not in the config API.** It is broker-internal and
 appears only under `/SEMP/v2/monitor`. Querying
@@ -315,8 +456,9 @@ docker-compose.broker.yaml     standalone broker — start this first (or use yo
 docker-compose.yaml            the tracing stack: OTel collector, Elasticsearch, Kibana
 docker-compose.jsonl.yaml      overlay adding the JSONL sink
 .env.example                   every setting, documented
+.env.vpn2.example              overrides for bootstrapping the second traced VPN
 config/
-  otel/collector.yaml          collector pipeline
+  otel/collector.yaml          collector pipelines — one per traced VPN, plus OTLP
   otel/jsonl-overlay.yaml      merged in when the JSONL sink is on
 scripts/
   setup-broker-tracing.sh      idempotent SEMP v2 bootstrap, run from the host

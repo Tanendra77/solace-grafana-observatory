@@ -18,7 +18,15 @@ exporters:
       max_days: ${env:TRACE_FILE_MAX_DAYS}
       max_backups: ${env:TRACE_FILE_MAX_BACKUPS}
 
+# Both traces pipelines have to be named here. Naming a pipeline that does not
+# exist in collector.yaml does not fail loudly — it declares a NEW pipeline with
+# no receivers, and the collector refuses to start. Keep these names in step
+# with the pipelines in collector.yaml.
 service:
   pipelines:
-    traces:
+    traces/vpn1:
+      exporters: [elasticsearch, debug, file/traces]
+    traces/vpn2:
+      exporters: [elasticsearch, debug, file/traces]
+    traces/otlp:
       exporters: [elasticsearch, debug, file/traces]

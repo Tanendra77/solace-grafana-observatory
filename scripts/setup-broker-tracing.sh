@@ -13,10 +13,19 @@
 set -eu
 
 cd "$(dirname "$0")/.."
-[ -f .env ] || { echo "no .env found — copy .env.example to .env first"; exit 1; }
+
+# Which env file to configure from. `set -a` below exports everything the file
+# sets, which OVERWRITES anything exported on the command line — so
+# `SOLACE_MSG_VPN=other ./scripts/setup-broker-tracing.sh` does not do what it
+# looks like it does, it silently reconfigures the VPN named in .env. Selecting
+# the file is the only override that works:
+#
+#   ENV_FILE=.env.vpn2 ./scripts/setup-broker-tracing.sh
+ENV_FILE="${ENV_FILE:-.env}"
+[ -f "$ENV_FILE" ] || { echo "no $ENV_FILE found — copy .env.example to .env first"; exit 1; }
 set -a
 # shellcheck disable=SC1091
-. ./.env
+. "./$ENV_FILE"
 set +a
 
 # --- configuration, all from the environment ---------------------------------

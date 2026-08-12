@@ -24,9 +24,13 @@ else
   BOLD=''; DIM=''; RED=''; GRN=''; YLW=''; RST=''
 fi
 
+# Same ENV_FILE selection as setup-broker-tracing.sh — verify the second traced
+# VPN with:  ENV_FILE=.env.vpn2 ./scripts/verify.sh
+ENV_FILE="${ENV_FILE:-.env}"
+[ -f "$ENV_FILE" ] || { echo "no $ENV_FILE found — copy .env.example to .env first"; exit 1; }
 set -a
 # shellcheck disable=SC1091
-. ./.env
+. "./$ENV_FILE"
 set +a
 
 CHECK_PERSISTENCE=false
