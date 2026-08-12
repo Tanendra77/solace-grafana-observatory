@@ -242,37 +242,50 @@ receivers:
     queue: ${env:SOLACE_TELEMETRY_QUEUE}    # same name, different VPN — correct
 ```
 
-Both write to the same `solace_trace` index, tagged by VPN so they can be told
-apart in Kibana:
+Both write to the same `solace_trace` index, so spans have to say which VPN
+they came from. The receiver already knows — it puts the VPN name in
+`service.instance.id` — so one OTTL statement copies it to a field that reads
+as what it is:
 
 ```yaml
 processors:
-  resource/vpn1:
-    attributes:
-      - { key: solace.msg_vpn, value: "${env:SOLACE_MSG_VPN}", action: upsert }
+  transform/vpn-tag:
+    error_mode: ignore
+    trace_statements:
+      - context: resource
+        statements:
+          - set(resource.attributes["solace.msg_vpn"], resource.attributes["service.instance.id"])
 ```
 
-This tag duplicates data the receiver already provides — it also puts the VPN
-name in `service.instance.id`. The explicit tag is kept anyway: a field called
-`service.instance.id` holding a Message VPN is undocumented receiver behaviour
-that can change between versions, and it reads as nonsense on a dashboard. Drop
-both processors and merge the pipelines back into one if you'd rather filter on
-the receiver's field and carry less config.
+Taking the value from the span rather than from config is what lets every VPN
+share **one** pipeline. Tagging from config cannot: a processor list applies to
+the whole pipeline, so two `resource` processors with different values would
+both run on every span and the last would win.
 
-The traces pipeline is split per VPN (`traces/vpn1`, `traces/vpn2`) for one
-reason only: `resource` applies to a whole pipeline, so tagging each stream
-differently means one pipeline each. OTLP gets a third, `traces/otlp`, with no
-`resource` processor — spans from an instrumented app didn't come from a
-Message VPN, and stamping one on them would be a lie in the data.
-`memory_limiter` and `batch` stay shared instances across all three — one
-memory budget for the process, one batcher feeding Elasticsearch.
+```yaml
+service:
+  pipelines:
+    traces/solace:
+      receivers: [solace/vpn1, solace/vpn2]
+      processors: [memory_limiter, transform/vpn-tag, batch]
+      exporters: [elasticsearch, debug]
+```
 
-**Adding a third VPN:** another `solace/vpn3` receiver on its own port, another
-`resource/vpn3`, another pipeline, another `.env.vpn3` — plus the port published
-in `docker-compose.broker.yaml` and passed through in `docker-compose.yaml`.
-Every pipeline must also be named in `config/otel/jsonl-overlay.yaml`; naming a
-pipeline there that doesn't exist in `collector.yaml` declares a *new* one with
-no receivers, and the collector refuses to start with
+OTLP keeps a separate `traces/otlp` pipeline for one reason: an instrumented
+app's `service.instance.id` is a real instance id, not a Message VPN, and
+copying it would claim otherwise. `memory_limiter` and `batch` are shared
+instances across both — one memory budget for the process, one batcher feeding
+Elasticsearch.
+
+**Adding a third VPN:** a `solace/vpn3` receiver on its own port, added to the
+`traces/solace` receiver list. Nothing else in the collector changes — no new
+processor, no new pipeline. Outside it: the port published in
+`docker-compose.broker.yaml`, passed through in `docker-compose.yaml`, and an
+`.env.vpn3` to bootstrap with.
+
+Pipelines must also be named in `config/otel/jsonl-overlay.yaml`, matching
+`collector.yaml`. Naming one there that doesn't exist declares a *new* pipeline
+with no receivers, and the collector refuses to start with
 `service::pipelines::traces: must have at least one receiver`.
 
 ### Why `ENV_FILE=` and not an exported variable
@@ -402,9 +415,9 @@ Things worth knowing:
 The collector's OTLP ports are published on the host (`4317` gRPC, `4318`
 HTTP). Point an instrumented app at either and its spans land in the same
 Elasticsearch alongside the broker's, in the same `solace_trace` index. OTLP
-has its own `traces/otlp` pipeline with no `resource` processor: those spans
-did not come from a Message VPN, so they carry no `solace.msg_vpn` tag rather
-than a misleading one.
+has its own `traces/otlp` pipeline that skips `transform/vpn-tag`: those spans
+did not come from a Message VPN, so they carry no `solace.msg_vpn` at all
+rather than a misleading one.
 
 ---
 
@@ -427,7 +440,7 @@ table is for understanding *why*.
 | Collector exits at startup: `service::pipelines::traces: must have at least one receiver` | `jsonl-overlay.yaml` names a pipeline that no longer exists in `collector.yaml`, which declares an empty new one instead of extending an existing one | make the pipeline names in both files match |
 | One VPN's spans arrive, the other's never do | that VPN's AMQP port isn't listening, or the bootstrap only ran for the first VPN | `ENV_FILE=.env.vpn2 ./scripts/verify.sh` — its AMQP check names the port it expected |
 | Bootstrap reconfigured the wrong VPN | `SOLACE_MSG_VPN=x ./scripts/...` — the script's `set -a` sourcing overwrites exported variables | use `ENV_FILE=.env.vpn2` instead; exporting the variable cannot work |
-| Both VPNs' spans land in Elasticsearch but can't be told apart | `SOLACE_MSG_VPN`/`SOLACE_MSG_VPN_2` not reaching the collector container | they must be listed in `docker-compose.yaml`'s `environment:`; check `resource.attributes.solace.msg_vpn` exists on a document |
+| Both VPNs' spans land in Elasticsearch but can't be told apart | `transform/vpn-tag` isn't in the pipeline, or the receiver stopped populating `service.instance.id` | check both fields on a document; `error_mode: ignore` means a broken statement drops the tag silently rather than failing |
 | Aggregating on `solace.msg_vpn` fails with `Fielddata is disabled` | the index was created by dynamic mapping, so the field is `text` with a `.keyword` subfield rather than a plain keyword | aggregate on `resource.attributes.solace.msg_vpn.keyword`; Kibana filters work on either |
 | Publishing over AMQP is rejected with `Queue Not Found` | Solace AMQP reads a bare address as a **queue** name | prefix the topic: `topic://test/trade/new` |
 | Traffic published successfully, queue's `lastSpooledMsgId` never moves, everything else checks out | the telemetry queue's spooling got stuck on a broker volume reused across sessions/branches — not fixable via SEMP, it's a broker-internal object | `docker compose -f docker-compose.broker.yaml down -v` for a clean volume, then `up -d` and `./scripts/setup-broker-tracing.sh` again |
@@ -458,7 +471,7 @@ docker-compose.jsonl.yaml      overlay adding the JSONL sink
 .env.example                   every setting, documented
 .env.vpn2.example              overrides for bootstrapping the second traced VPN
 config/
-  otel/collector.yaml          collector pipelines — one per traced VPN, plus OTLP
+  otel/collector.yaml          collector pipelines — one for all traced VPNs, one for OTLP
   otel/jsonl-overlay.yaml      merged in when the JSONL sink is on
 scripts/
   setup-broker-tracing.sh      idempotent SEMP v2 bootstrap, run from the host
